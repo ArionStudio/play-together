@@ -9,6 +9,22 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@workspace/game-contracts": path.resolve(
+        __dirname,
+        "../../packages/game-contracts/src/index.ts"
+      ),
+      "@workspace/game-core": path.resolve(
+        __dirname,
+        "../../packages/game-core/src/index.ts"
+      ),
+      "@workspace/minesweeper-engine": path.resolve(
+        __dirname,
+        "../../packages/minesweeper-engine/src/index.ts"
+      ),
+      "@workspace/sudoku-engine": path.resolve(
+        __dirname,
+        "../../packages/sudoku-engine/src/index.ts"
+      ),
     },
   },
 })

@@ -1,4 +1,5 @@
 {
+  "extends": "../../tsconfig.base.json",
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
@@ -8,7 +9,15 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@workspace/ui/*": ["../../packages/ui/src/*"]
+      "@workspace/ui/*": ["../../packages/ui/src/*"],
+      "@workspace/game-contracts": ["../../packages/game-contracts/src/index.ts"],
+      "@workspace/game-contracts/*": ["../../packages/game-contracts/src/*"],
+      "@workspace/game-core": ["../../packages/game-core/src/index.ts"],
+      "@workspace/game-core/*": ["../../packages/game-core/src/*"],
+      "@workspace/minesweeper-engine": ["../../packages/minesweeper-engine/src/index.ts"],
+      "@workspace/minesweeper-engine/*": ["../../packages/minesweeper-engine/src/*"],
+      "@workspace/sudoku-engine": ["../../packages/sudoku-engine/src/index.ts"],
+      "@workspace/sudoku-engine/*": ["../../packages/sudoku-engine/src/*"]
     }
   }
 }

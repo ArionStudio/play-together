@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@workspace/game-contracts": ["../game-contracts/src/index.ts"],
+      "@workspace/game-contracts/*": ["../game-contracts/src/*"],
+      "@workspace/minesweeper-engine": ["./src/index.ts"],
+      "@workspace/minesweeper-engine/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "tests"]
+}

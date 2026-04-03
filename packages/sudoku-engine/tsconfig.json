@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@workspace/game-contracts": ["../game-contracts/src/index.ts"],
+      "@workspace/game-contracts/*": ["../game-contracts/src/*"],
+      "@workspace/sudoku-engine": ["./src/index.ts"],
+      "@workspace/sudoku-engine/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "tests"]
+}

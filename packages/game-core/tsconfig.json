@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@workspace/game-contracts": ["../game-contracts/src/index.ts"],
+      "@workspace/game-contracts/*": ["../game-contracts/src/*"],
+      "@workspace/game-core": ["./src/index.ts"],
+      "@workspace/game-core/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}

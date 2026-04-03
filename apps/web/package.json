@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "convex:env:sync": "convex env set --from-file .env.convex.local",
+    "convex:dev": "convex dev",
     "build": "tsc -b && vite build",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
@@ -12,10 +14,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@clerk/clerk-react": "^5.61.3",
     "@phosphor-icons/react": "^2.1.10",
+    "@workspace/game-contracts": "workspace:*",
+    "@workspace/game-core": "workspace:*",
+    "@workspace/minesweeper-engine": "workspace:*",
+    "@workspace/sudoku-engine": "workspace:*",
     "@workspace/ui": "workspace:*",
+    "convex": "^1.34.1",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.14.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

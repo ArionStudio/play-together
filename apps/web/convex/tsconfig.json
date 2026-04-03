@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": {
+    "rootDir": "../../.."
+  },
+  "include": [
+    "./**/*.ts",
+    "../../packages/game-contracts/src/**/*.ts",
+    "../../packages/game-core/src/**/*.ts",
+    "../../packages/minesweeper-engine/src/**/*.ts"
+  ]
+}

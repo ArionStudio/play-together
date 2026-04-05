@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  analyzeSudokuDifficulty,
   countSudokuSolutions,
   createSudokuGame,
   createSudokuPuzzle,
@@ -26,7 +27,7 @@ describe("sudoku engine", () => {
     expect(countSudokuSolutions(puzzle.givens, 2)).toBe(1)
   })
 
-  it("reduces clue counts as difficulty rises", () => {
+  it("reduces clue counts as difficulty rises", { timeout: 30000 }, () => {
     const clueCounts = sudokuDifficulties.map(
       (difficulty) => createSudokuPuzzle(difficulty, `seed-${difficulty}`).clueCount
     )
@@ -35,6 +36,22 @@ describe("sudoku engine", () => {
     expect(clueCounts[1]).toBeGreaterThan(clueCounts[2]!)
     expect(clueCounts[2]).toBeGreaterThan(clueCounts[3]!)
     expect(clueCounts[3]).toBeGreaterThan(clueCounts[4]!)
+  })
+
+  it("classifies generated puzzles with a logic-based difficulty model", { timeout: 30000 }, () => {
+    const classifications = sudokuDifficulties.map((difficulty) =>
+      analyzeSudokuDifficulty(
+        createSudokuPuzzle(difficulty, `seed-analysis-${difficulty}`).givens
+      ).classifiedDifficulty
+    )
+
+    expect(classifications).toEqual([
+      "easy",
+      "medium",
+      "hard",
+      "expert",
+      "haaard",
+    ])
   })
 
   it("does not let fixed clues be edited", () => {

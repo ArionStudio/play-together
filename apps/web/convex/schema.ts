@@ -31,6 +31,11 @@ const matchOutcomeValidator = v.union(
   v.literal("lost"),
   v.literal("abandoned")
 )
+const completedRunOutcomeValidator = v.union(
+  v.literal("won"),
+  v.literal("lost"),
+  v.literal("abandoned")
+)
 const profileStatusValidator = v.union(
   v.literal("online"),
   v.literal("available"),
@@ -87,6 +92,13 @@ const sudokuGameConfigValidator = v.object({
   ),
   clueStyle: v.optional(v.union(v.literal("generated"), v.literal("curated"))),
 })
+const sudokuDifficultyValidator = v.union(
+  v.literal("easy"),
+  v.literal("medium"),
+  v.literal("hard"),
+  v.literal("expert"),
+  v.literal("haaard")
+)
 
 const baseRulesetConfigValidator = {
   modeKey: v.string(),
@@ -122,6 +134,36 @@ const visibleCellValidator = v.object({
   exploded: v.boolean(),
 })
 
+const sudokuNotesValidator = v.array(v.array(v.number()))
+const sudokuNoteMarkValidator = v.object({
+  digit: v.number(),
+  profileId: v.id("profiles"),
+})
+const sudokuNoteMarksValidator = v.array(v.array(sudokuNoteMarkValidator))
+const sudokuValueOwnersValidator = v.array(v.union(v.null(), v.id("profiles")))
+const sudokuHighlightValidator = v.union(
+  v.object({
+    kind: v.literal("cell"),
+    index: v.number(),
+  }),
+  v.object({
+    kind: v.literal("row"),
+    index: v.number(),
+  }),
+  v.object({
+    kind: v.literal("column"),
+    index: v.number(),
+  }),
+  v.object({
+    kind: v.literal("box"),
+    index: v.number(),
+  }),
+  v.object({
+    kind: v.literal("digit"),
+    index: v.number(),
+  })
+)
+
 export default defineSchema({
   users: defineTable({
     clerkUserId: v.string(),
@@ -144,6 +186,7 @@ export default defineSchema({
     usernameTag: v.string(),
     usernameTagLower: v.string(),
     avatarUrl: v.optional(v.string()),
+    avatarSeed: v.optional(v.string()),
     status: profileStatusValidator,
     presence: presenceValidator,
     createdAt: v.number(),
@@ -320,6 +363,22 @@ export default defineSchema({
     .index("by_profileId", ["profileId"])
     .index("by_profileId_completedAt", ["profileId", "completedAt"]),
 
+  completedRuns: defineTable({
+    matchId: v.id("matches"),
+    profileId: v.id("profiles"),
+    gameKey: gameKeyValidator,
+    modeKey: v.string(),
+    rulesetKey: v.string(),
+    ranked: v.boolean(),
+    boardKey: v.string(),
+    outcome: completedRunOutcomeValidator,
+    durationMs: v.optional(v.union(v.number(), v.null())),
+    completedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_matchId_profileId", ["matchId", "profileId"])
+    .index("by_profileId_completedAt", ["profileId", "completedAt"]),
+
   presence: defineTable({
     profileId: v.id("profiles"),
     state: presenceValidator,
@@ -360,6 +419,17 @@ export default defineSchema({
     .index("by_matchId", ["matchId"])
     .index("by_profileId", ["profileId"]),
 
+  minesweeperSharedStates: defineTable({
+    matchId: v.id("matches"),
+    visible: v.array(visibleCellValidator),
+    flagsUsed: v.number(),
+    revealedCount: v.number(),
+    mistakes: v.number(),
+    alive: v.boolean(),
+    finishedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_matchId", ["matchId"]),
+
   minesweeperEvents: defineTable({
     matchId: v.id("matches"),
     profileId: v.optional(v.id("profiles")),
@@ -367,4 +437,69 @@ export default defineSchema({
     payload: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_matchId", ["matchId"]),
+
+  sudokuMatches: defineTable({
+    matchId: v.id("matches"),
+    ruleset: rulesetConfigValidator,
+    difficulty: sudokuDifficultyValidator,
+    puzzleGivens: v.array(v.number()),
+    solution: v.array(v.number()),
+    sharedBoard: v.boolean(),
+    lastActionAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_matchId", ["matchId"]),
+
+  sudokuPlayerStates: defineTable({
+    matchId: v.id("matches"),
+    profileId: v.id("profiles"),
+    values: v.array(v.number()),
+    notes: sudokuNotesValidator,
+    finishedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_matchId", ["matchId"])
+    .index("by_profileId", ["profileId"]),
+
+  sudokuSharedStates: defineTable({
+    matchId: v.id("matches"),
+    values: v.array(v.number()),
+    valueOwners: sudokuValueOwnersValidator,
+    noteMarks: sudokuNoteMarksValidator,
+    finishedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_matchId", ["matchId"]),
+
+  sudokuPresences: defineTable({
+    matchId: v.id("matches"),
+    profileId: v.id("profiles"),
+    selectedIndex: v.optional(v.number()),
+    highlight: v.optional(sudokuHighlightValidator),
+    focuses: v.optional(v.array(sudokuHighlightValidator)),
+    updatedAt: v.number(),
+  })
+    .index("by_matchId", ["matchId"])
+    .index("by_matchId_profileId", ["matchId", "profileId"]),
+
+  sudokuEvents: defineTable({
+    matchId: v.id("matches"),
+    profileId: v.optional(v.id("profiles")),
+    type: v.string(),
+    payload: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_matchId", ["matchId"]),
+
+  sudokuExtremeValidSeeds: defineTable({
+    createdByProfileId: v.id("profiles"),
+    difficulty: sudokuDifficultyValidator,
+    clueCount: v.number(),
+    givens: v.array(v.number()),
+    puzzleHash: v.string(),
+    seed: v.string(),
+    solution: v.array(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_seed", ["seed"])
+    .index("by_puzzleHash", ["puzzleHash"])
+    .index("by_createdByProfileId_createdAt", ["createdByProfileId", "createdAt"])
+    .index("by_difficulty_createdAt", ["difficulty", "createdAt"]),
 })

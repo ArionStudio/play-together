@@ -34,7 +34,7 @@ function ServicesCallToAction() {
       <SignedIn>
         <Button asChild size="lg">
           <Link to="/games/minesweeper/solo">
-            Launch Minesweeper
+            Play Minesweeper
             <ArrowRight className="size-4" />
           </Link>
         </Button>
@@ -50,7 +50,7 @@ export function LandingPage() {
     <Page>
       <PageHeader
         title="Play Together"
-        description="Minesweeper and Sudoku solo are live now. Accounts, friends, lobbies, and profile flows are wired into the app structure and activate when Clerk and Convex are configured."
+        description="Minesweeper and Sudoku are playable now."
         actions={
           <>
             <ServicesCallToAction />
@@ -60,34 +60,34 @@ export function LandingPage() {
           </>
         }
       />
-      <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+      <div className="grid gap-6 lg:grid-cols-2">
         <Surface className="p-6">
-          <h2 className="text-lg font-semibold">Start here</h2>
+          <h2 className="text-lg font-semibold">Games</h2>
           <div className="mt-4 divide-y divide-border">
             {[
               {
-                title: "Play Minesweeper",
-                description: "The live game in this build. Presets and custom boards are already playable.",
+                title: "Minesweeper",
+                description: "Solo boards with presets and custom setups.",
                 href: "/games/minesweeper/solo",
                 label: "Open",
               },
               {
-                title: "Play Sudoku",
-                description: "Classic solo boards with generated puzzles, notes mode, and difficulty presets.",
-                href: "/games/sudoku",
+                title: "Sudoku",
+                description: "Generated puzzles with notes and difficulty presets.",
+                href: "/games/sudoku/solo",
                 label: "Open",
               },
               {
-                title: "Check leaderboards",
-                description: "Preview how ranked results are separated by game and board type.",
+                title: "Leaderboards",
+                description: "Ranked solo times by category.",
                 href: "/leaderboards",
                 label: "View",
               },
               {
-                title: servicesEnabled ? "Open social screens" : "Finish platform setup",
+                title: servicesEnabled ? "Friends and lobbies" : "Platform setup",
                 description: servicesEnabled
-                  ? "Friends, onboarding, and profile routes are available when you sign in."
-                  : "Add Clerk and Convex keys to enable sign-in, profiles, and realtime data.",
+                  ? "Profiles, friends, and lobbies after sign-in."
+                  : "Add Clerk and Convex keys to enable connected features.",
                 href: servicesEnabled ? "/friends" : "/sign-in",
                 label: servicesEnabled ? "Browse" : "Setup",
               },
@@ -110,12 +110,12 @@ export function LandingPage() {
           </div>
         </Surface>
         <Surface className="p-6">
-          <h2 className="text-lg font-semibold">Current state</h2>
+          <h2 className="text-lg font-semibold">Platform</h2>
           <dl className="mt-4 divide-y divide-border text-sm">
             {[
-              ["Playable now", "Solo Minesweeper with presets and custom boards, plus solo Sudoku with seeded puzzles, notes, and difficulty presets."],
-              ["Requires setup", "Google sign-in, public profiles, and Convex-backed data."],
-              ["Next in line", "Parties, matchmaking, multiplayer lobbies, and more games."],
+              ["Playable now", "Minesweeper and Sudoku solo."],
+              ["Connected features", "Profiles, friends, lobbies, and leaderboards."],
+              ["Still pending", "Parties, matchmaking, and multiplayer modes."],
             ].map(([term, detail]) => (
               <div key={term} className="py-4">
                 <dt className="font-medium">{term}</dt>

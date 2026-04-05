@@ -1,21 +1,145 @@
-# shadcn/ui monorepo template
+# Play Together
 
-This is a Vite monorepo template with shadcn/ui.
+Monorepo for a puzzle platform built around:
 
-## Adding components
+- `apps/web`: React + Vite frontend with optional Clerk + Convex integration
+- `packages/game-contracts`: shared game and ruleset contracts
+- `packages/game-core`: shared key-building and scoring helpers
+- `packages/minesweeper-engine`: deterministic Minesweeper engine
+- `packages/sudoku-engine`: Sudoku generation and gameplay helpers
+- `packages/ui`: shared UI components
 
-To add components to your app, run the following command at the root of your `web` app:
+## Workspace Commands
 
 ```bash
-pnpm dlx shadcn@latest add button -c apps/web
+pnpm install
+pnpm convex:dev
+pnpm convex:env:sync
+pnpm typecheck
+pnpm test
+pnpm lint
+pnpm --filter web build
+pnpm dev
 ```
 
-This will place the ui components in the `packages/ui/src/components` directory.
+## Runtime Setup
 
-## Using components
+This repo expects two local env files inside `apps/web`:
 
-To use the components in your app, import them from the `ui` package.
+- `.env.local` for frontend Vite variables
+- `.env.convex.local` for Convex deployment env variables
 
-```tsx
-import { Button } from "@workspace/ui/components/button";
+Start from the examples:
+
+```bash
+cp apps/web/.env.example apps/web/.env.local
+cp apps/web/.env.convex.example apps/web/.env.convex.local
+```
+
+Fill them with the values below.
+
+### 1. `VITE_CLERK_PUBLISHABLE_KEY`
+
+Put this in `apps/web/.env.local`.
+
+Where to get it:
+
+- Open the Clerk Dashboard
+- Select your application
+- Go to `API Keys`
+- In `Quick Copy`, copy the `Publishable Key`
+
+Expected shape:
+
+```bash
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+```
+
+### 2. `VITE_CONVEX_URL`
+
+Put this in `apps/web/.env.local`.
+
+Where to get it:
+
+- Open the Convex Dashboard
+- Select your project and deployment
+- Go to `Settings` -> `URL and Deploy Key`
+- Copy the deployment URL
+
+Expected shape:
+
+```bash
+VITE_CONVEX_URL=https://your-deployment.convex.cloud
+```
+
+Notes:
+
+- Convex docs say `npx convex dev` can also write the deployment URL into your frontend `.env` file for Vite projects.
+- If you already have the URL in the dashboard, copying it manually is fine.
+
+### 3. `CLERK_JWT_ISSUER_DOMAIN`
+
+Put this in `apps/web/.env.convex.local`.
+
+Where to get it:
+
+- Open the Clerk Dashboard
+- Select your application
+- Enable the `Convex` integration if you have not already
+- Go to `API Keys`
+- Copy the `Frontend API URL`
+
+Expected shape:
+
+```bash
+CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
+```
+
+This repo reads that value in [auth.config.ts](/C:/Users/Furgil/dev/play-together/apps/web/convex/auth.config.ts#L1) and registers Clerk with `applicationID: "convex"`, so the Clerk side must issue the `convex` JWT template expected by `ConvexProviderWithClerk`.
+
+### 4. Configure the Convex deployment first
+
+Run this from the repo root:
+
+```bash
+pnpm convex:dev
+```
+
+Why this is required:
+
+- `CLERK_JWT_ISSUER_DOMAIN` is pushed into a specific Convex deployment
+- that deployment is not known until `convex dev` links or creates the project locally
+- running `npx convex dev` from the repo root fails here because `convex` is installed in `apps/web`, not in the root package
+
+If Convex prints:
+
+```bash
+Convex AI files are not installed. Run npx convex ai-files install to get started or npx convex ai-files disable to hide this message.
+```
+
+that message is optional. It does not block app setup. You can ignore it or run:
+
+```bash
+cd apps/web
+npx convex ai-files disable
+```
+
+### 5. Sync the Convex env and start dev
+
+```bash
+pnpm convex:env:sync
+pnpm dev
+```
+
+If `convex:env:sync` succeeds, Convex receives `CLERK_JWT_ISSUER_DOMAIN` from `apps/web/.env.convex.local`.
+
+Final expected local files:
+
+```bash
+# apps/web/.env.local
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+VITE_CONVEX_URL=https://your-deployment.convex.cloud
+
+# apps/web/.env.convex.local
+CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
 ```

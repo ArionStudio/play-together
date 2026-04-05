@@ -9,12 +9,15 @@
  */
 
 import type * as friends from "../friends.js";
+import type * as history from "../history.js";
 import type * as leaderboards from "../leaderboards.js";
 import type * as lib from "../lib.js";
 import type * as lobbies from "../lobbies.js";
 import type * as matches from "../matches.js";
 import type * as minesweeper from "../minesweeper.js";
+import type * as multiplayer from "../multiplayer.js";
 import type * as profiles from "../profiles.js";
+import type * as sudokuSeeds from "../sudokuSeeds.js";
 
 import type {
   ApiFromModules,
@@ -24,12 +27,15 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   friends: typeof friends;
+  history: typeof history;
   leaderboards: typeof leaderboards;
   lib: typeof lib;
   lobbies: typeof lobbies;
   matches: typeof matches;
   minesweeper: typeof minesweeper;
+  multiplayer: typeof multiplayer;
   profiles: typeof profiles;
+  sudokuSeeds: typeof sudokuSeeds;
 }>;
 
 /**

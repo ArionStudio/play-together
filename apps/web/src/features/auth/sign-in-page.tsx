@@ -16,7 +16,7 @@ function EnabledSignIn() {
         <Page className="mx-auto max-w-xl">
           <PageHeader
             title="Sign in"
-            description="Clerk handles the account. Convex stores the public profile and game data after the first successful login."
+            description="Continue with Google to open your profile."
           />
           <Surface className="p-6">
             <SignInButton mode="modal">
@@ -37,17 +37,15 @@ export function SignInPage() {
       <Page className="mx-auto max-w-xl">
         <PageHeader
           title="Set up authentication"
-          description="Copy `apps/web/.env.example` to `apps/web/.env.local`, then copy `apps/web/.env.convex.example` to `apps/web/.env.convex.local`."
+          description="Add the Clerk and Convex env values, then restart the app."
         />
-        <Surface className="p-6">
-          <p className="text-sm leading-6 text-muted-foreground">
-            Put `VITE_CLERK_PUBLISHABLE_KEY` and `VITE_CONVEX_URL` in `.env.local`.
-            Put `CLERK_JWT_ISSUER_DOMAIN` in `.env.convex.local`, run
-            `pnpm --filter web convex:env:sync`, then start `pnpm dev`.
-          </p>
-          <div className="mt-4">
+        <Surface className="space-y-3 p-6 text-sm text-muted-foreground">
+          <p>`apps/web/.env.local` needs `VITE_CLERK_PUBLISHABLE_KEY` and `VITE_CONVEX_URL`.</p>
+          <p>`apps/web/.env.convex.local` needs `CLERK_JWT_ISSUER_DOMAIN`.</p>
+          <p>Then run `pnpm convex:env:sync` and `pnpm dev`.</p>
+          <div className="pt-1">
             <Button asChild>
-              <Link to="/games/minesweeper/solo">Open Minesweeper</Link>
+              <Link to="/games/sudoku/solo">Open Sudoku</Link>
             </Button>
           </div>
         </Surface>

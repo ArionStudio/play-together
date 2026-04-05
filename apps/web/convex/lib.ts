@@ -122,6 +122,48 @@ export async function requireProfile(ctx: ConvexCtx) {
   return { identity, profile }
 }
 
+export async function getProfilesByIds(
+  ctx: ConvexCtx,
+  profileIds: string[]
+) {
+  const uniqueProfileIds = [...new Set(profileIds)]
+
+  const rows = await Promise.all(
+    uniqueProfileIds.map(async (profileId) => {
+      const profile = await ctx.db.get(profileId as Doc<"profiles">["_id"])
+      return profile ? [profileId, profile] : null
+    })
+  )
+
+  return new Map(
+    rows.filter((row) => row !== null) as Array<[string, Doc<"profiles">]>
+  )
+}
+
+export async function getPresenceRowsByProfileIds(
+  ctx: ConvexCtx,
+  profileIds: string[]
+) {
+  const uniqueProfileIds = [...new Set(profileIds)]
+
+  const rows = await Promise.all(
+    uniqueProfileIds.map(async (profileId) => {
+      const presenceRow = await ctx.db
+        .query("presence")
+        .withIndex("by_profileId", (query) =>
+          query.eq("profileId", profileId as Doc<"profiles">["_id"])
+        )
+        .unique()
+
+      return presenceRow ? [profileId, presenceRow] : null
+    })
+  )
+
+  return new Map(
+    rows.filter((row) => row !== null) as Array<[string, Doc<"presence">]>
+  )
+}
+
 export function serializeJson(value: unknown) {
   return JSON.stringify(value)
 }
@@ -141,6 +183,7 @@ export function toPublicProfile(profile: Doc<"profiles">) {
     tag: profile.tag,
     usernameTag: profile.usernameTag,
     avatarUrl: profile.avatarUrl,
+    avatarSeed: profile.avatarSeed,
     status: profile.status,
     presence: profile.presence,
   }

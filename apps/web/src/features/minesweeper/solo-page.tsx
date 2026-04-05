@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { MouseEvent as ReactMouseEvent } from "react"
 import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import { SignInButton, useAuth } from "@clerk/clerk-react"
@@ -17,9 +17,9 @@ import {
   type MinesweeperBoardState,
   type MinesweeperPlayerState,
 } from "@workspace/minesweeper-engine"
-import { usePlatformServices } from "@/app/providers.tsx"
+import { api } from "@convex/api"
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
-import { api } from "../../../convex/_generated/api"
+import { readAppPreferences, updateAppPreferences } from "@/lib/app-preferences.ts"
 
 type ActionMode = "reveal" | "flag"
 type PresetKey = "beginner" | "intermediate" | "expert" | "custom"
@@ -41,7 +41,7 @@ type PublicBoardCell = {
 type SoloStatus = "ready" | "playing" | "won" | "lost"
 
 function createSeed() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return crypto.randomUUID()
 }
 
 function numberColor(value: number) {
@@ -67,6 +67,29 @@ function nextConfigToBoardConfig(config: SoloConfig) {
   }
 }
 
+function presetToConfig(presetKey: Exclude<PresetKey, "custom">): SoloConfig {
+  const preset = MINESWEEPER_PRESET_BOARDS[presetKey]
+
+  return {
+    width: preset.width,
+    height: preset.height,
+    mineCount: preset.mineCount ?? 10,
+  }
+}
+
+function boardSummaryLabel(config: SoloConfig) {
+  return `${config.width} x ${config.height} / ${config.mineCount} mines`
+}
+
+function resolveStoredSoloBoardConfig(preferences: {
+  customBoard: SoloConfig
+  presetKey: PresetKey
+}) {
+  return preferences.presetKey === "custom"
+    ? preferences.customBoard
+    : presetToConfig(preferences.presetKey)
+}
+
 function cellLabel(cell: PublicBoardCell | null, hiddenCell?: MinesweeperBoardState["cells"][number]) {
   const revealed = cell?.revealed ?? false
   const flagged = cell?.flagged ?? false
@@ -75,11 +98,11 @@ function cellLabel(cell: PublicBoardCell | null, hiddenCell?: MinesweeperBoardSt
   const adjacentMines = cell?.adjacentMines ?? hiddenCell?.adjacentMines ?? 0
 
   if (flagged && !revealed) {
-    return "⚑"
+    return "F"
   }
 
   if (revealed && (exploded || isMine)) {
-    return "✹"
+    return "*"
   }
 
   if (revealed && adjacentMines > 0) {
@@ -107,12 +130,14 @@ function MinesweeperBoard({
   hiddenCells,
   actionMode,
   onCellAction,
+  interactive = true,
 }: {
   width: number
   cells: PublicBoardCell[]
   hiddenCells?: MinesweeperBoardState["cells"]
   actionMode: ActionMode
   onCellAction: (index: number, mode: ActionMode) => void
+  interactive?: boolean
 }) {
   const cellSize = getBoardCellSizeClass(width)
 
@@ -133,16 +158,18 @@ function MinesweeperBoard({
           <button
             key={index}
             type="button"
+            disabled={!interactive}
             onClick={() => onCellAction(index, actionMode)}
             onContextMenu={handleContextMenu}
             style={{ width: cellSize, height: cellSize, touchAction: "manipulation" }}
             className={[
-              "rounded-md border text-center text-sm font-semibold transition-colors",
+              "rounded-md border text-center text-sm font-semibold transition-colors disabled:cursor-default disabled:opacity-100",
               cell.revealed
                 ? cell.exploded
                   ? "border-rose-400 bg-rose-500/20 text-rose-100"
                   : "border-stone-700 bg-stone-800 text-stone-100"
-                : "border-stone-600 bg-stone-700 text-stone-100 hover:bg-stone-600",
+                : "border-stone-600 bg-stone-700 text-stone-100",
+              interactive && !cell.revealed ? "hover:bg-stone-600" : "",
               !cell.revealed && cell.flagged ? "text-amber-300" : "",
               cell.revealed && adjacentMines > 0 ? numberColor(adjacentMines) : "",
             ].join(" ")}
@@ -152,54 +179,6 @@ function MinesweeperBoard({
         )
       })}
     </div>
-  )
-}
-
-function MobileSoloToolbar({
-  actionMode,
-  setActionMode,
-  remainingMines,
-  timeLabel,
-  status,
-  onRestart,
-}: {
-  actionMode: ActionMode
-  setActionMode: (mode: ActionMode) => void
-  remainingMines: number
-  timeLabel: string
-  status: SoloStatus | string
-  onRestart: () => void
-}) {
-  return (
-    <Surface className="p-3 lg:hidden">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">{status}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {remainingMines} mines left · {timeLabel}
-          </p>
-        </div>
-        <Button size="sm" variant="outline" onClick={onRestart} type="button">
-          New board
-        </Button>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <Button
-          variant={actionMode === "reveal" ? "default" : "outline"}
-          onClick={() => setActionMode("reveal")}
-          type="button"
-        >
-          Reveal
-        </Button>
-        <Button
-          variant={actionMode === "flag" ? "default" : "outline"}
-          onClick={() => setActionMode("flag")}
-          type="button"
-        >
-          Flag
-        </Button>
-      </div>
-    </Surface>
   )
 }
 
@@ -215,6 +194,10 @@ function CustomBoardForm({
     () => validateBoardConfig(nextConfigToBoardConfig(draft)),
     [draft]
   )
+
+  useEffect(() => {
+    setDraft(config)
+  }, [config])
 
   return (
     <Surface className="p-5">
@@ -249,12 +232,8 @@ function CustomBoardForm({
         </ul>
       )}
       <div className="mt-4">
-        <Button
-          disabled={!validation.ok}
-          onClick={() => onApply(draft)}
-          type="button"
-        >
-          Apply board
+        <Button disabled={!validation.ok} onClick={() => onApply(draft)} type="button">
+          Use custom board
         </Button>
       </div>
     </Surface>
@@ -266,9 +245,7 @@ function useMinesweeperSolo(initialConfig: SoloConfig) {
   const [seed, setSeed] = useState(() => createSeed())
   const [board, setBoard] = useState<MinesweeperBoardState | null>(null)
   const [player, setPlayer] = useState<MinesweeperPlayerState | null>(null)
-  const [status, setStatus] = useState<"ready" | "playing" | "won" | "lost">(
-    "ready"
-  )
+  const [status, setStatus] = useState<SoloStatus>("ready")
   const [timerStartedAt, setTimerStartedAt] = useState<number | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [actionMode, setActionMode] = useState<ActionMode>("reveal")
@@ -304,7 +281,7 @@ function useMinesweeperSolo(initialConfig: SoloConfig) {
 
     const nextBoard = createBoard(nextConfigToBoardConfig(config), seed, {
       firstClickIndex: index,
-      firstClickBehavior: "safe",
+      firstClickBehavior: "safe_zero",
     })
     const nextPlayer = createPlayerState(nextBoard)
     setBoard(nextBoard)
@@ -378,11 +355,141 @@ function useMinesweeperSolo(initialConfig: SoloConfig) {
 
 function statusLabel(status: SoloStatus) {
   return {
-    ready: "Waiting for first move",
-    playing: "Game in progress",
+    ready: "Ready",
+    playing: "In progress",
     won: "Board cleared",
     lost: "Mine triggered",
   }[status]
+}
+
+function buildLocalBoardCells({
+  board,
+  config,
+  player,
+  revealAll = false,
+}: {
+  board: MinesweeperBoardState | null
+  config: SoloConfig
+  player: MinesweeperPlayerState | null
+  revealAll?: boolean
+}) {
+  const width = board?.width ?? config.width
+  const height = board?.height ?? config.height
+
+  return Array.from({ length: width * height }, (_, index) => {
+    const visible = player?.visible[index]
+    const hiddenCell = board?.cells[index]
+    const revealed = visible?.revealed ?? false
+    const shouldShowHidden = revealAll || revealed
+
+    return {
+      revealed: shouldShowHidden,
+      flagged: visible?.flagged ?? false,
+      exploded: visible?.exploded ?? false,
+      adjacentMines:
+        shouldShowHidden && hiddenCell && !hiddenCell.isMine ? hiddenCell.adjacentMines : null,
+      isMine: shouldShowHidden && hiddenCell ? hiddenCell.isMine : null,
+    }
+  })
+}
+
+function buildConnectedBoardCellsForDisplay(
+  cells: PublicBoardCell[],
+  revealAll = false
+) {
+  return cells.map((cell) => ({
+    ...cell,
+    revealed: revealAll || cell.revealed,
+  }))
+}
+
+function SoloSetupPanel({
+  allowCustom,
+  customConfig,
+  existingRun,
+  onApplyCustom,
+  onSelectPreset,
+  onStart,
+  selectedPreset,
+  selectionLabel,
+  setupNote,
+  startLabel,
+}: {
+  allowCustom: boolean
+  customConfig: SoloConfig
+  existingRun?: {
+    description: string
+    label: string
+    onResume: () => void
+  }
+  onApplyCustom: (config: SoloConfig) => void
+  onSelectPreset: (presetKey: Exclude<PresetKey, "custom">) => void
+  onStart: () => void
+  selectedPreset: PresetKey
+  selectionLabel: string
+  setupNote?: string
+  startLabel: string
+}) {
+  return (
+    <div className="space-y-4">
+      <Surface className="p-5 sm:p-6">
+        <div className="space-y-5">
+          <div>
+            <h2 className="text-lg font-semibold">Choose a board</h2>
+            {setupNote ? (
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{setupNote}</p>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(["beginner", "intermediate", "expert"] as const).map((presetKey) => (
+              <Button
+                key={presetKey}
+                onClick={() => onSelectPreset(presetKey)}
+                type="button"
+                variant={selectedPreset === presetKey ? "default" : "outline"}
+              >
+                {presetKey}
+              </Button>
+            ))}
+            <Button
+              disabled={selectedPreset !== "custom"}
+              type="button"
+              variant={selectedPreset === "custom" ? "default" : "outline"}
+            >
+              custom
+            </Button>
+          </div>
+          <div className="rounded-lg border border-border px-4 py-3 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Selected board</span>
+              <span className="font-medium">{selectionLabel}</span>
+            </div>
+          </div>
+          <Button className="w-full sm:w-auto" onClick={onStart} type="button">
+            {startLabel}
+          </Button>
+        </div>
+      </Surface>
+      {existingRun ? (
+        <Surface className="p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold">Current run</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {existingRun.description}
+              </p>
+            </div>
+            <Button onClick={existingRun.onResume} type="button" variant="outline">
+              {existingRun.label}
+            </Button>
+          </div>
+        </Surface>
+      ) : null}
+      {allowCustom ? (
+        <CustomBoardForm config={customConfig} onApply={onApplyCustom} />
+      ) : null}
+    </div>
+  )
 }
 
 function SoloCompletionPanel({
@@ -401,44 +508,38 @@ function SoloCompletionPanel({
   modeLabel?: string
   onRestart: () => void
   secondaryAction?: {
+    href?: string
     label: string
-    href: string
+    onClick?: () => void
   }
 }) {
   const isWin = result === "won"
 
   return (
-    <Surface
-      className={[
-        "border p-5",
-        isWin
-          ? "border-emerald-500/30 bg-emerald-500/5"
-          : "border-rose-500/30 bg-rose-500/5",
-      ].join(" ")}
-    >
+    <Surface className="p-5 sm:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold">
-            {isWin ? "Board cleared." : "Mine triggered."}
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            {isWin
-              ? "The run is complete. Start another board or check how the time stacks up."
-              : "That run is over. Start another board and try a different opening route."}
+          <h2 className="text-lg font-semibold">{isWin ? "You won." : "You lost."}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {isWin ? "The board is clear." : "That run is over."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={onRestart} type="button">
-            New board
+            Play again
           </Button>
-          {secondaryAction ? (
+          {secondaryAction?.href ? (
             <Button asChild type="button" variant="outline">
               <Link to={secondaryAction.href}>{secondaryAction.label}</Link>
+            </Button>
+          ) : secondaryAction?.onClick ? (
+            <Button onClick={secondaryAction.onClick} type="button" variant="outline">
+              {secondaryAction.label}
             </Button>
           ) : null}
         </div>
       </div>
-      <dl className="mt-4 grid gap-3 border-t border-border pt-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
+      <dl className="mt-5 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-2">
         {[
           ["Result", isWin ? "Win" : "Loss"],
           ["Time", timeLabel],
@@ -456,189 +557,402 @@ function SoloCompletionPanel({
   )
 }
 
+function SoloBoardPanel({
+  actionMode,
+  boardCells,
+  hiddenCells,
+  interactive = true,
+  onCellAction,
+  remainingMines,
+  setActionMode,
+  status,
+  timeLabel,
+  width,
+}: {
+  actionMode: ActionMode
+  boardCells: PublicBoardCell[]
+  hiddenCells?: MinesweeperBoardState["cells"]
+  interactive?: boolean
+  onCellAction: (index: number, mode: ActionMode) => void
+  onChangeBoard: () => void
+  remainingMines: number
+  setActionMode: (mode: ActionMode) => void
+  status: string
+  timeLabel: string
+  width: number
+}) {
+  return (
+    <Surface className="p-4 sm:p-5">
+      <div className="flex flex-col gap-4 border-b border-border pb-4">
+        <dl className="grid grid-cols-3 gap-3 text-sm">
+          {[
+            ["Status", status],
+            ["Mines", String(remainingMines)],
+            ["Time", timeLabel],
+          ].map(([term, value]) => (
+            <div key={term} className="space-y-1">
+              <dt className="text-muted-foreground">{term}</dt>
+              <dd className="font-medium">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {interactive ? (
+          <div className="grid grid-cols-2 gap-2 sm:max-w-xs">
+            <Button
+              onClick={() => setActionMode("reveal")}
+              type="button"
+              variant={actionMode === "reveal" ? "default" : "outline"}
+            >
+              Reveal
+            </Button>
+            <Button
+              onClick={() => setActionMode("flag")}
+              type="button"
+              variant={actionMode === "flag" ? "default" : "outline"}
+            >
+              Flag
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      <div className="-mx-4 overflow-auto px-4 pt-4 pb-1 sm:mx-0 sm:px-0">
+        <MinesweeperBoard
+          actionMode={actionMode}
+          width={width}
+          cells={boardCells}
+          hiddenCells={hiddenCells}
+          interactive={interactive}
+          onCellAction={onCellAction}
+        />
+      </div>
+    </Surface>
+  )
+}
+
+function SoloRunPanel(props: {
+  actionMode: ActionMode
+  boardCells: PublicBoardCell[]
+  hiddenCells?: MinesweeperBoardState["cells"]
+  interactive?: boolean
+  onCellAction: (index: number, mode: ActionMode) => void
+  onChangeBoard: () => void
+  remainingMines: number
+  setActionMode: (mode: ActionMode) => void
+  status: string
+  timeLabel: string
+  width: number
+}) {
+  return (
+    <Page className="mx-auto max-w-4xl">
+      <PageHeader
+        title="Minesweeper"
+        actions={
+          <Button onClick={props.onChangeBoard} type="button" variant="outline">
+            Change board
+          </Button>
+        }
+      />
+      <SoloBoardPanel {...props} />
+    </Page>
+  )
+}
+
+function SoloLossPage({
+  actionMode,
+  boardCells,
+  boardKey,
+  hiddenCells,
+  mineCount,
+  modeLabel,
+  onChangeBoard,
+  onRestart,
+  secondaryAction,
+  setActionMode,
+  timeLabel,
+  width,
+}: {
+  actionMode: ActionMode
+  boardCells: PublicBoardCell[]
+  boardKey: string
+  hiddenCells?: MinesweeperBoardState["cells"]
+  mineCount: number
+  modeLabel?: string
+  onChangeBoard: () => void
+  onRestart: () => void
+  secondaryAction?: {
+    href?: string
+    label: string
+    onClick?: () => void
+  }
+  setActionMode: (mode: ActionMode) => void
+  timeLabel: string
+  width: number
+}) {
+  return (
+    <Page className="mx-auto max-w-4xl">
+      <PageHeader
+        title="Minesweeper"
+        actions={
+          <Button onClick={onChangeBoard} type="button" variant="outline">
+            Change board
+          </Button>
+        }
+      />
+      <div className="space-y-6">
+        <SoloCompletionPanel
+          result="lost"
+          timeLabel={timeLabel}
+          boardKey={boardKey}
+          mineCount={mineCount}
+          modeLabel={modeLabel}
+          onRestart={onRestart}
+          secondaryAction={secondaryAction}
+        />
+        <SoloBoardPanel
+          actionMode={actionMode}
+          boardCells={boardCells}
+          hiddenCells={hiddenCells}
+          interactive={false}
+          onCellAction={() => {}}
+          onChangeBoard={onChangeBoard}
+          remainingMines={0}
+          setActionMode={setActionMode}
+          status="Mine triggered"
+          timeLabel={timeLabel}
+          width={width}
+        />
+      </div>
+    </Page>
+  )
+}
+
+function SoloWinPage({
+  actionMode,
+  boardCells,
+  boardKey,
+  hiddenCells,
+  mineCount,
+  modeLabel,
+  onChangeBoard,
+  onRestart,
+  secondaryAction,
+  setActionMode,
+  timeLabel,
+  width,
+}: {
+  actionMode: ActionMode
+  boardCells: PublicBoardCell[]
+  boardKey: string
+  hiddenCells?: MinesweeperBoardState["cells"]
+  mineCount: number
+  modeLabel?: string
+  onChangeBoard: () => void
+  onRestart: () => void
+  secondaryAction?: {
+    href?: string
+    label: string
+    onClick?: () => void
+  }
+  setActionMode: (mode: ActionMode) => void
+  timeLabel: string
+  width: number
+}) {
+  return (
+    <Page className="mx-auto max-w-4xl">
+      <PageHeader
+        title="Minesweeper"
+        actions={
+          <Button onClick={onChangeBoard} type="button" variant="outline">
+            Change board
+          </Button>
+        }
+      />
+      <div className="space-y-6">
+        <SoloCompletionPanel
+          result="won"
+          timeLabel={timeLabel}
+          boardKey={boardKey}
+          mineCount={mineCount}
+          modeLabel={modeLabel}
+          onRestart={onRestart}
+          secondaryAction={secondaryAction}
+        />
+        <SoloBoardPanel
+          actionMode={actionMode}
+          boardCells={boardCells}
+          hiddenCells={hiddenCells}
+          interactive={false}
+          onCellAction={() => {}}
+          onChangeBoard={onChangeBoard}
+          remainingMines={0}
+          setActionMode={setActionMode}
+          status="Board cleared"
+          timeLabel={timeLabel}
+          width={width}
+        />
+      </div>
+    </Page>
+  )
+}
+
 function LocalSoloPage({ allowCustom }: { allowCustom: boolean }) {
-  const solo = useMinesweeperSolo({
-    width: MINESWEEPER_PRESET_BOARDS.beginner.width,
-    height: MINESWEEPER_PRESET_BOARDS.beginner.height,
-    mineCount: MINESWEEPER_PRESET_BOARDS.beginner.mineCount ?? 10,
-  })
+  const [storedPreferences] = useState(() => readAppPreferences().games.minesweeper.solo)
+  const solo = useMinesweeperSolo(resolveStoredSoloBoardConfig(storedPreferences))
+  const [hasStarted, setHasStarted] = useState(false)
+  const [setupSelection, setSetupSelection] = useState<{
+    boardConfig: SoloConfig
+    presetKey: PresetKey
+  }>(() => ({
+    boardConfig: resolveStoredSoloBoardConfig(storedPreferences),
+    presetKey: storedPreferences.presetKey,
+  }))
+
+  useEffect(() => {
+    updateAppPreferences((current) => ({
+      ...current,
+      games: {
+        ...current.games,
+        minesweeper: {
+          ...current.games.minesweeper,
+          solo: {
+            presetKey: setupSelection.presetKey,
+            customBoard:
+              setupSelection.presetKey === "custom"
+                ? setupSelection.boardConfig
+                : current.games.minesweeper.solo.customBoard,
+          },
+        },
+      },
+    }))
+  }, [setupSelection])
 
   const boardKey = buildBoardKey(nextConfigToBoardConfig(solo.config))
   const remainingMines = Math.max(
     0,
     solo.targetMineCount - (solo.player?.flagsUsed ?? 0)
   )
-  const mobileStatus = statusLabel(solo.status)
   const completionResult =
     solo.status === "won" || solo.status === "lost" ? solo.status : null
+  const timeLabel = formatDurationMs(solo.elapsed * 1000)
+  const finishedBoardCells = buildLocalBoardCells({
+    board: solo.board,
+    config: solo.config,
+    player: solo.player,
+    revealAll: true,
+  })
+
+  function selectPreset(presetKey: Exclude<PresetKey, "custom">) {
+    setSetupSelection({
+      boardConfig: presetToConfig(presetKey),
+      presetKey,
+    })
+  }
+
+  function applyCustom(config: SoloConfig) {
+    setSetupSelection({
+      boardConfig: config,
+      presetKey: "custom",
+    })
+  }
+
+  function startLocalRun() {
+    solo.restart(setupSelection.boardConfig)
+    setHasStarted(true)
+  }
+
+  function openSetup() {
+    solo.restart(setupSelection.boardConfig)
+    setHasStarted(false)
+  }
+
+  if (!hasStarted) {
+    return (
+      <Page className="mx-auto max-w-2xl">
+        <PageHeader
+          title="Minesweeper"
+          description="Configure the board, then start."
+        />
+        <SoloSetupPanel
+          allowCustom={allowCustom}
+          customConfig={setupSelection.boardConfig}
+          onApplyCustom={applyCustom}
+          onSelectPreset={selectPreset}
+          onStart={startLocalRun}
+          selectedPreset={setupSelection.presetKey}
+          selectionLabel={boardSummaryLabel(setupSelection.boardConfig)}
+          setupNote="Solo play runs locally on your device."
+          startLabel="Start board"
+        />
+      </Page>
+    )
+  }
+
+  if (completionResult === "lost") {
+    return (
+      <SoloLossPage
+        actionMode={solo.actionMode}
+        boardCells={finishedBoardCells}
+        boardKey={boardKey}
+        hiddenCells={solo.board?.cells}
+        mineCount={solo.targetMineCount}
+        modeLabel="Local"
+        onChangeBoard={openSetup}
+        onRestart={startLocalRun}
+        secondaryAction={{
+          label: "Change board",
+          onClick: openSetup,
+        }}
+        setActionMode={solo.setActionMode}
+        timeLabel={timeLabel}
+        width={solo.board?.width ?? solo.config.width}
+      />
+    )
+  }
+
+  if (completionResult) {
+    return (
+      <SoloWinPage
+        actionMode={solo.actionMode}
+        boardCells={finishedBoardCells}
+        boardKey={boardKey}
+        hiddenCells={solo.board?.cells}
+        mineCount={solo.targetMineCount}
+        modeLabel="Local"
+        onChangeBoard={openSetup}
+        onRestart={startLocalRun}
+        secondaryAction={{
+          label: "Change board",
+          onClick: openSetup,
+        }}
+        setActionMode={solo.setActionMode}
+        timeLabel={timeLabel}
+        width={solo.board?.width ?? solo.config.width}
+      />
+    )
+  }
 
   return (
-    <Page>
-      <PageHeader
-        title="Minesweeper"
-        description="Local fallback mode stays available when Clerk and Convex are not configured."
-        actions={
-          <Button onClick={() => solo.restart()} type="button" variant="outline">
-            New board
-          </Button>
-        }
-      />
-      <MobileSoloToolbar
-        actionMode={solo.actionMode}
-        setActionMode={solo.setActionMode}
-        remainingMines={remainingMines}
-        timeLabel={`${solo.elapsed}s`}
-        status={mobileStatus}
-        onRestart={() => solo.restart()}
-      />
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="hidden space-y-4 lg:block">
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Game</h2>
-            <dl className="mt-4 divide-y divide-border text-sm">
-              {[
-                ["Status", statusLabel(solo.status)],
-                ["Time", `${solo.elapsed}s`],
-                ["Mines left", String(remainingMines)],
-                ["Board key", boardKey],
-              ].map(([term, value]) => (
-                <div key={term} className="flex items-center justify-between gap-4 py-3">
-                  <dt className="text-muted-foreground">{term}</dt>
-                  <dd className="font-medium">{value}</dd>
-                </div>
-              ))}
-            </dl>
-          </Surface>
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Controls</h2>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                variant={solo.actionMode === "reveal" ? "default" : "outline"}
-                onClick={() => solo.setActionMode("reveal")}
-                type="button"
-              >
-                Tap to reveal
-              </Button>
-              <Button
-                variant={solo.actionMode === "flag" ? "default" : "outline"}
-                onClick={() => solo.setActionMode("flag")}
-                type="button"
-              >
-                Tap to flag
-              </Button>
-            </div>
-            <div className="mt-5">
-              <h3 className="font-medium">Presets</h3>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {Object.entries(MINESWEEPER_PRESET_BOARDS).map(([presetKey, preset]) => (
-                  <Button
-                    key={presetKey}
-                    onClick={() =>
-                      solo.restart({
-                        width: preset.width,
-                        height: preset.height,
-                        mineCount: preset.mineCount ?? 10,
-                      })
-                    }
-                    type="button"
-                    variant="outline"
-                  >
-                    {presetKey}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </Surface>
-          {allowCustom ? (
-            <CustomBoardForm
-              config={solo.config}
-              onApply={(config) => solo.restart(config)}
-            />
-          ) : null}
-        </div>
-        <div className="space-y-4">
-          {completionResult ? (
-            <SoloCompletionPanel
-              result={completionResult}
-              timeLabel={formatDurationMs(solo.elapsed * 1000)}
-              boardKey={boardKey}
-              mineCount={solo.targetMineCount}
-              modeLabel="Local fallback"
-              onRestart={() => solo.restart()}
-            />
-          ) : null}
-          <Surface className="p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground lg:hidden">
-              <span>Pan to inspect larger boards.</span>
-              <span>Tap mode switches above.</span>
-            </div>
-            <div className="-mx-4 overflow-auto px-4 pb-2 sm:mx-0 sm:px-0">
-              <MinesweeperBoard
-                actionMode={solo.actionMode}
-                width={solo.board?.width ?? solo.config.width}
-                cells={Array.from(
-                  { length: (solo.board?.width ?? solo.config.width) * (solo.board?.height ?? solo.config.height) },
-                  (_, index) => {
-                    const visible = solo.player?.visible[index]
-                    const hiddenCell = solo.board?.cells[index]
-
-                    return {
-                      revealed: visible?.revealed ?? false,
-                      flagged: visible?.flagged ?? false,
-                      exploded: visible?.exploded ?? false,
-                      adjacentMines:
-                        visible?.revealed && hiddenCell && !hiddenCell.isMine
-                          ? hiddenCell.adjacentMines
-                          : null,
-                      isMine:
-                        visible?.revealed && hiddenCell ? hiddenCell.isMine : null,
-                    }
-                  }
-                )}
-                hiddenCells={solo.board?.cells}
-                onCellAction={solo.trigger}
-              />
-            </div>
-          </Surface>
-          <Surface className="p-4 text-sm leading-6 text-muted-foreground">
-            The local fallback includes seeded board generation, flood-fill reveals,
-            chording, flagging, win/loss evaluation, and custom board validation.
-          </Surface>
-          <div className="space-y-4 lg:hidden">
-            <Surface className="p-5">
-              <h2 className="text-lg font-semibold">Presets</h2>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {Object.entries(MINESWEEPER_PRESET_BOARDS).map(([presetKey, preset]) => (
-                  <Button
-                    key={presetKey}
-                    onClick={() =>
-                      solo.restart({
-                        width: preset.width,
-                        height: preset.height,
-                        mineCount: preset.mineCount ?? 10,
-                      })
-                    }
-                    type="button"
-                    variant="outline"
-                  >
-                    {presetKey}
-                  </Button>
-                ))}
-              </div>
-            </Surface>
-            {allowCustom ? (
-              <CustomBoardForm
-                config={solo.config}
-                onApply={(config) => solo.restart(config)}
-              />
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </Page>
+    <SoloRunPanel
+      actionMode={solo.actionMode}
+      boardCells={buildLocalBoardCells({
+        board: solo.board,
+        config: solo.config,
+        player: solo.player,
+      })}
+      hiddenCells={solo.board?.cells}
+      onCellAction={solo.trigger}
+      onChangeBoard={openSetup}
+      remainingMines={remainingMines}
+      setActionMode={solo.setActionMode}
+      status={statusLabel(solo.status)}
+      timeLabel={timeLabel}
+      width={solo.board?.width ?? solo.config.width}
+    />
   )
 }
 
+// Kept for the server-authoritative flow, even though the current export uses local solo mode.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
   const navigate = useNavigate()
   const params = useParams()
@@ -660,49 +974,41 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
   const toggleFlagMutation = useMutation(api.matches.toggleFlag)
   const chord = useMutation(api.matches.chord)
   const [actionMode, setActionMode] = useState<ActionMode>("reveal")
+  const [storedPreferences] = useState(() => readAppPreferences().games.minesweeper.solo)
   const [launchConfig, setLaunchConfig] = useState<{
-    presetKey: PresetKey
     boardConfig?: SoloConfig
-  }>({
-    presetKey: "beginner",
-  })
+    presetKey: PresetKey
+  }>(() => ({
+    boardConfig: resolveStoredSoloBoardConfig(storedPreferences),
+    presetKey: storedPreferences.presetKey,
+  }))
   const [matchId, setMatchId] = useState<string | null>(routeMatchId)
   const [creating, setCreating] = useState(false)
-  const autoStarted = useRef(false)
+  const activeMatchId = routeMatchId ?? matchId
   const match = useQuery(
     api.matches.getCurrentState,
-    matchId ? { matchId: matchId as never } : "skip"
+    activeMatchId ? { matchId: activeMatchId as never } : "skip"
   )
   const [elapsedMs, setElapsedMs] = useState(0)
 
   useEffect(() => {
-    if (routeMatchId && routeMatchId !== matchId) {
-      setMatchId(routeMatchId)
-    }
-  }, [routeMatchId, matchId])
-
-  useEffect(() => {
-    if (!matchId && latestMatch?.matchId) {
-      setMatchId(latestMatch.matchId)
-    }
-  }, [latestMatch, matchId])
-
-  useEffect(() => {
-    if (routeMatchId || !profile || latestMatch !== null || creating || autoStarted.current) {
-      return
-    }
-
-    autoStarted.current = true
-    void (async () => {
-      setCreating(true)
-      try {
-        const nextMatch = await createMatch({ presetKey: "beginner" })
-        setMatchId(nextMatch.matchId)
-      } finally {
-        setCreating(false)
-      }
-    })()
-  }, [createMatch, creating, latestMatch, profile, routeMatchId])
+    updateAppPreferences((current) => ({
+      ...current,
+      games: {
+        ...current.games,
+        minesweeper: {
+          ...current.games.minesweeper,
+          solo: {
+            presetKey: launchConfig.presetKey,
+            customBoard:
+              launchConfig.presetKey === "custom" && launchConfig.boardConfig
+                ? launchConfig.boardConfig
+                : current.games.minesweeper.solo.customBoard,
+          },
+        },
+      },
+    }))
+  }, [launchConfig])
 
   useEffect(() => {
     if (!match || match.status !== "active") {
@@ -717,7 +1023,7 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
     return () => window.clearInterval(interval)
   }, [match])
 
-  async function startMatch(nextConfig: { presetKey: PresetKey; boardConfig?: SoloConfig }) {
+  async function startMatch(nextConfig: { boardConfig?: SoloConfig; presetKey: PresetKey }) {
     setLaunchConfig(nextConfig)
     setCreating(true)
 
@@ -733,14 +1039,24 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
             }
       )
 
-      setMatchId(nextMatch.matchId)
-
       if (routeMatchId) {
         navigate(`/games/minesweeper/match/${nextMatch.matchId}`, { replace: true })
+      } else {
+        setMatchId(nextMatch.matchId)
       }
     } finally {
       setCreating(false)
     }
+  }
+
+  function openSetup() {
+    if (routeMatchId) {
+      setMatchId(null)
+      navigate("/games/minesweeper")
+      return
+    }
+
+    setMatchId(null)
   }
 
   if (!isSignedIn) {
@@ -752,7 +1068,7 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
         />
         <Surface className="space-y-4 p-6">
           <p className="text-sm leading-6 text-muted-foreground">
-            When platform services are enabled, solo games run entirely through Convex.
+            When platform services are enabled, solo games run through Convex.
           </p>
           <div className="flex gap-3">
             <SignInButton mode="modal">
@@ -768,7 +1084,7 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
   }
 
   if (sessionStatus === undefined || isConvexLoading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading match…</div>
+    return <div className="p-6 text-sm text-muted-foreground">Loading match...</div>
   }
 
   if (!isConvexAuthenticated) {
@@ -802,12 +1118,74 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
     )
   }
 
-  if (profile === undefined || latestMatch === undefined || creating) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading match…</div>
+  if (
+    profile === undefined ||
+    latestMatch === undefined ||
+    creating ||
+    (activeMatchId !== null && match === undefined)
+  ) {
+    return <div className="p-6 text-sm text-muted-foreground">Loading match...</div>
+  }
+
+  if (!match && activeMatchId) {
+    return (
+      <Page className="mx-auto max-w-xl">
+        <PageHeader title="Minesweeper" />
+        <Surface className="p-6">
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-muted-foreground">
+              This run is not available anymore.
+            </p>
+            <Button onClick={openSetup} type="button">
+              Back to setup
+            </Button>
+          </div>
+        </Surface>
+      </Page>
+    )
   }
 
   if (!match) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading match…</div>
+    return (
+      <Page className="mx-auto max-w-2xl">
+        <PageHeader
+          title="Minesweeper"
+          description="Configure the board, then start."
+        />
+        <SoloSetupPanel
+          allowCustom={allowCustom}
+          customConfig={launchConfig.boardConfig ?? presetToConfig("beginner")}
+          existingRun={
+            latestMatch
+              ? {
+                  description: `${latestMatch.board.width} x ${latestMatch.board.height} / ${latestMatch.board.mineCount} mines`,
+                  label: "Resume run",
+                  onResume: () => setMatchId(latestMatch.matchId),
+                }
+              : undefined
+          }
+          onApplyCustom={(config) =>
+            setLaunchConfig({
+              boardConfig: config,
+              presetKey: "custom",
+            })
+          }
+          onSelectPreset={(presetKey) =>
+            setLaunchConfig({
+              boardConfig: presetToConfig(presetKey),
+              presetKey,
+            })
+          }
+          onStart={() => startMatch(launchConfig)}
+          selectedPreset={launchConfig.presetKey}
+          selectionLabel={boardSummaryLabel(
+            launchConfig.boardConfig ?? presetToConfig("beginner")
+          )}
+          setupNote="Solo runs here are server-authoritative."
+          startLabel={latestMatch ? "Start new board" : "Start board"}
+        />
+      </Page>
+    )
   }
 
   const remainingMines = Math.max(
@@ -820,191 +1198,79 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
       ? "Board cleared"
       : match.outcome === "lost"
         ? "Mine triggered"
-        : "Game in progress"
+        : "In progress"
   const completionResult =
     match.outcome === "won" || match.outcome === "lost" ? match.outcome : null
   const timeLabel =
     typeof match.durationMs === "number"
       ? formatDurationMs(match.durationMs)
       : formatDurationMs(elapsedMs)
+  const finishedBoardCells = buildConnectedBoardCellsForDisplay(match.board.cells, true)
+
+  if (completionResult === "lost") {
+    return (
+      <SoloLossPage
+        actionMode={actionMode}
+        boardCells={finishedBoardCells}
+        boardKey={match.boardKey}
+        mineCount={match.board.mineCount}
+        modeLabel={match.ranked ? "Ranked" : "Practice"}
+        onChangeBoard={openSetup}
+        onRestart={() => startMatch(launchConfig)}
+        secondaryAction={{ label: "Change board", onClick: openSetup }}
+        setActionMode={setActionMode}
+        timeLabel={timeLabel}
+        width={match.board.width}
+      />
+    )
+  }
+
+  if (completionResult) {
+    return (
+      <SoloWinPage
+        actionMode={actionMode}
+        boardCells={finishedBoardCells}
+        boardKey={match.boardKey}
+        mineCount={match.board.mineCount}
+        modeLabel={match.ranked ? "Ranked" : "Practice"}
+        onChangeBoard={openSetup}
+        onRestart={() => startMatch(launchConfig)}
+        secondaryAction={
+          completionResult === "won"
+            ? { label: "View leaderboards", href: "/leaderboards" }
+            : { label: "Change board", onClick: openSetup }
+        }
+        setActionMode={setActionMode}
+        timeLabel={timeLabel}
+        width={match.board.width}
+      />
+    )
+  }
 
   return (
-    <Page>
-      <PageHeader
-        title="Minesweeper"
-        description="Solo runs are server-authoritative here. Reveals, flags, chords, results, and leaderboard writes all go through Convex."
-        actions={
-          <Button onClick={() => startMatch(launchConfig)} type="button" variant="outline">
-            New board
-          </Button>
+    <SoloRunPanel
+      actionMode={actionMode}
+      boardCells={match.board.cells}
+      onCellAction={(index, mode) => {
+        if (mode === "flag") {
+          void toggleFlagMutation({ matchId: match.matchId, index })
+          return
         }
-      />
-      <MobileSoloToolbar
-        actionMode={actionMode}
-        setActionMode={setActionMode}
-        remainingMines={remainingMines}
-        timeLabel={timeLabel}
-        status={status}
-        onRestart={() => startMatch(launchConfig)}
-      />
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="hidden space-y-4 lg:block">
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Run</h2>
-            <dl className="mt-4 divide-y divide-border text-sm">
-              {[
-                ["Status", status],
-                ["Time", timeLabel],
-                ["Mines left", String(remainingMines)],
-                ["Board key", match.boardKey],
-                ["Mode", match.ranked ? "Ranked" : "Practice"],
-              ].map(([term, value]) => (
-                <div key={term} className="flex items-center justify-between gap-4 py-3">
-                  <dt className="text-muted-foreground">{term}</dt>
-                  <dd className="font-medium">{value}</dd>
-                </div>
-              ))}
-            </dl>
-          </Surface>
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Controls</h2>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                variant={actionMode === "reveal" ? "default" : "outline"}
-                onClick={() => setActionMode("reveal")}
-                type="button"
-              >
-                Tap to reveal
-              </Button>
-              <Button
-                variant={actionMode === "flag" ? "default" : "outline"}
-                onClick={() => setActionMode("flag")}
-                type="button"
-              >
-                Tap to flag
-              </Button>
-            </div>
-            <div className="mt-5">
-              <h3 className="font-medium">Presets</h3>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {Object.entries(MINESWEEPER_PRESET_BOARDS).map(([presetKey]) => (
-                  <Button
-                    key={presetKey}
-                    onClick={() =>
-                      startMatch({
-                        presetKey: presetKey as PresetKey,
-                      })
-                    }
-                    type="button"
-                    variant="outline"
-                  >
-                    {presetKey}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </Surface>
-          {allowCustom ? (
-            <CustomBoardForm
-              config={launchConfig.boardConfig ?? {
-                width: MINESWEEPER_PRESET_BOARDS.beginner.width,
-                height: MINESWEEPER_PRESET_BOARDS.beginner.height,
-                mineCount: MINESWEEPER_PRESET_BOARDS.beginner.mineCount ?? 10,
-              }}
-              onApply={(config) =>
-                startMatch({
-                  presetKey: "custom",
-                  boardConfig: config,
-                })
-              }
-            />
-          ) : null}
-        </div>
-        <div className="space-y-4">
-          {completionResult ? (
-            <SoloCompletionPanel
-              result={completionResult}
-              timeLabel={timeLabel}
-              boardKey={match.boardKey}
-              mineCount={match.board.mineCount}
-              modeLabel={match.ranked ? "Ranked" : "Practice"}
-              onRestart={() => startMatch(launchConfig)}
-              secondaryAction={
-                completionResult === "won"
-                  ? { label: "View leaderboards", href: "/leaderboards" }
-                  : undefined
-              }
-            />
-          ) : null}
-          <Surface className="p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground lg:hidden">
-              <span>Pan to inspect larger boards.</span>
-              <span>Reveal or flag from the mobile toolbar.</span>
-            </div>
-            <div className="-mx-4 overflow-auto px-4 pb-2 sm:mx-0 sm:px-0">
-              <MinesweeperBoard
-                actionMode={actionMode}
-                width={match.board.width}
-                cells={match.board.cells}
-                onCellAction={(index, mode) => {
-                  if (mode === "flag") {
-                    void toggleFlagMutation({ matchId: match.matchId, index })
-                    return
-                  }
 
-                  if (match.board.cells[index]?.revealed) {
-                    void chord({ matchId: match.matchId, index })
-                    return
-                  }
+        if (match.board.cells[index]?.revealed) {
+          void chord({ matchId: match.matchId, index })
+          return
+        }
 
-                  void reveal({ matchId: match.matchId, index })
-                }}
-              />
-            </div>
-          </Surface>
-          <Surface className="p-4 text-sm leading-6 text-muted-foreground">
-            Invalid actions are rejected on the server, and ranked leaderboard entries are
-            written only from validated finished matches.
-          </Surface>
-          <div className="space-y-4 lg:hidden">
-            <Surface className="p-5">
-              <h2 className="text-lg font-semibold">Presets</h2>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {Object.entries(MINESWEEPER_PRESET_BOARDS).map(([presetKey]) => (
-                  <Button
-                    key={presetKey}
-                    onClick={() =>
-                      startMatch({
-                        presetKey: presetKey as PresetKey,
-                      })
-                    }
-                    type="button"
-                    variant="outline"
-                  >
-                    {presetKey}
-                  </Button>
-                ))}
-              </div>
-            </Surface>
-            {allowCustom ? (
-              <CustomBoardForm
-                config={launchConfig.boardConfig ?? {
-                  width: MINESWEEPER_PRESET_BOARDS.beginner.width,
-                  height: MINESWEEPER_PRESET_BOARDS.beginner.height,
-                  mineCount: MINESWEEPER_PRESET_BOARDS.beginner.mineCount ?? 10,
-                }}
-                onApply={(config) =>
-                  startMatch({
-                    presetKey: "custom",
-                    boardConfig: config,
-                  })
-                }
-              />
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </Page>
+        void reveal({ matchId: match.matchId, index })
+      }}
+      onChangeBoard={openSetup}
+      remainingMines={remainingMines}
+      setActionMode={setActionMode}
+      status={status}
+      timeLabel={timeLabel}
+      width={match.board.width}
+    />
   )
 }
 
@@ -1013,11 +1279,5 @@ export function MinesweeperSoloPage({
 }: {
   allowCustom?: boolean
 }) {
-  const servicesEnabled = usePlatformServices()
-
-  return servicesEnabled ? (
-    <ConnectedSoloPage allowCustom={allowCustom} />
-  ) : (
-    <LocalSoloPage allowCustom={allowCustom} />
-  )
+  return <LocalSoloPage allowCustom={allowCustom} />
 }

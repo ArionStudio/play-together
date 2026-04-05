@@ -1,62 +1,141 @@
-import { useEffect, useEffectEvent, useMemo, useState } from "react"
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
+import {
+  ArrowsInSimple,
+  ArrowsOutSimple,
+  ArrowCounterClockwise,
+  Backspace,
+  Crosshair,
+  PencilSimple,
+  Square,
+} from "@phosphor-icons/react"
+import { Link } from "react-router-dom"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import {
   clearCellValue,
   createSudokuGame,
-  createSudokuPuzzle,
   getConflictingIndices,
   getIncorrectIndices,
   getProgress,
   getRelatedIndices,
   isSudokuSolved,
   setCellValue,
+  sudokuDifficultyLabels,
   sudokuDifficulties,
   toggleCellNote,
   type SudokuDifficulty,
   type SudokuGameState,
+  type SudokuPuzzle,
 } from "@workspace/sudoku-engine"
 
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
+import { resolveNotesDigitInput } from "@/features/sudoku/input-mode.ts"
+import {
+  readAppPreferences,
+  updateAppPreferences,
+  type SudokuInputPreference,
+} from "@/lib/app-preferences.ts"
 
 const DIGIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
-const difficultyLabels: Record<SudokuDifficulty, string> = {
-  easy: "Easy",
-  medium: "Medium",
-  hard: "Hard",
-  expert: "Expert",
-  haaard: "Haaard",
+type EntryMode = "fill" | "notes" | "focus"
+type FocusKind = "cell" | "row" | "column" | "box" | "digit"
+type FocusMark = {
+  kind: FocusKind
+  index: number
 }
 
 type SudokuSession = {
   difficulty: SudokuDifficulty
   elapsedMs: number
   game: SudokuGameState
-  notesMode: boolean
+  history: SudokuGameState[]
   selectedIndex: number | null
   startedAt: number | null
 }
 
+type GenerateSudokuPuzzleResponse =
+  | {
+      difficulty: SudokuDifficulty
+      id: number
+      puzzle: SudokuPuzzle
+    }
+  | {
+      difficulty: SudokuDifficulty
+      error: string
+      id: number
+    }
+
 function createSeed() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return crypto.randomUUID()
 }
 
 function findFirstEditableIndex(game: SudokuGameState) {
   return game.cells.findIndex((cell) => !cell.fixed)
 }
 
-function createSudokuSession(difficulty: SudokuDifficulty): SudokuSession {
-  const game = createSudokuGame(createSudokuPuzzle(difficulty, createSeed()))
+function createIdleSudokuSession(difficulty: SudokuDifficulty): SudokuSession {
+  const game = createSudokuGame({
+    clueCount: 0,
+    difficulty,
+    givens: Array.from({ length: 81 }, () => 0),
+    seed: "idle",
+    solution: Array.from({ length: 81 }, () => 0),
+  })
 
   return {
     difficulty,
     elapsedMs: 0,
     game,
-    notesMode: false,
+    history: [],
+    selectedIndex: null,
+    startedAt: null,
+  }
+}
+
+function createSudokuSessionFromPuzzle(puzzle: SudokuPuzzle): SudokuSession {
+  const game = createSudokuGame(puzzle)
+
+  return {
+    difficulty: puzzle.difficulty,
+    elapsedMs: 0,
+    game,
+    history: [],
     selectedIndex: findFirstEditableIndex(game),
     startedAt: null,
   }
+}
+
+function clearDigitFromRelatedNotes(args: {
+  game: SudokuGameState
+  index: number
+  value: number
+}) {
+  if (args.value <= 0 || args.game.puzzle.solution[args.index] !== args.value) {
+    return args.game
+  }
+
+  const related = new Set(getRelatedIndices(args.index))
+  let changed = false
+  const nextCells = args.game.cells.map((cell, cellIndex) => {
+    if (!related.has(cellIndex) || !cell.notes.includes(args.value)) {
+      return cell
+    }
+
+    changed = true
+
+    return {
+      ...cell,
+      notes: cell.notes.filter((note) => note !== args.value),
+    }
+  })
+
+  return changed
+    ? {
+        ...args.game,
+        cells: nextCells,
+      }
+    : args.game
 }
 
 function formatElapsed(elapsedMs: number) {
@@ -67,8 +146,371 @@ function formatElapsed(elapsedMs: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
 }
 
+function getFocusKey(focus: FocusMark) {
+  return `${focus.kind}:${focus.index}`
+}
+
+function FocusKindIcon({ kind }: { kind: FocusKind }) {
+  if (kind === "cell") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        aria-hidden="true"
+        fill="none"
+      >
+        <rect
+          x="2.5"
+          y="2.5"
+          width="11"
+          height="11"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect x="6" y="6" width="4" height="4" rx="0.75" fill="currentColor" />
+      </svg>
+    )
+  }
+
+  if (kind === "row") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        aria-hidden="true"
+        fill="none"
+      >
+        <rect
+          x="2.5"
+          y="2.5"
+          width="11"
+          height="11"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="3.5"
+          y="6.25"
+          width="9"
+          height="3.5"
+          rx="0.75"
+          fill="currentColor"
+        />
+      </svg>
+    )
+  }
+
+  if (kind === "column") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        aria-hidden="true"
+        fill="none"
+      >
+        <rect
+          x="2.5"
+          y="2.5"
+          width="11"
+          height="11"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="6.25"
+          y="3.5"
+          width="3.5"
+          height="9"
+          rx="0.75"
+          fill="currentColor"
+        />
+      </svg>
+    )
+  }
+
+  if (kind === "box") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        aria-hidden="true"
+        fill="none"
+      >
+        <rect
+          x="2.5"
+          y="2.5"
+          width="11"
+          height="11"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="4.5"
+          y="4.5"
+          width="7"
+          height="7"
+          rx="0.75"
+          fill="currentColor"
+        />
+      </svg>
+    )
+  }
+
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
+      <circle cx="8" cy="8" r="5.25" stroke="currentColor" strokeWidth="1.5" />
+      <text
+        x="8"
+        y="10.1"
+        textAnchor="middle"
+        fontSize="7.5"
+        fontWeight="700"
+        fill="currentColor"
+      >
+        1
+      </text>
+    </svg>
+  )
+}
+
+function buildFocusForCell(
+  index: number,
+  focusKind: Exclude<FocusKind, "digit">
+): FocusMark {
+  switch (focusKind) {
+    case "cell":
+      return { kind: "cell", index }
+    case "row":
+      return { kind: "row", index: Math.floor(index / 9) }
+    case "column":
+      return { kind: "column", index: index % 9 }
+    case "box":
+      return {
+        kind: "box",
+        index: Math.floor(index / 27) * 3 + Math.floor((index % 9) / 3),
+      }
+  }
+}
+
+function toggleFocusMark(focuses: FocusMark[], nextFocus: FocusMark) {
+  const key = getFocusKey(nextFocus)
+
+  return focuses.some((focus) => getFocusKey(focus) === key)
+    ? focuses.filter((focus) => getFocusKey(focus) !== key)
+    : [...focuses, nextFocus]
+}
+
+function matchesFocus(args: {
+  focus: FocusMark
+  index: number
+  values: number[]
+}) {
+  const row = Math.floor(args.index / 9)
+  const column = args.index % 9
+
+  switch (args.focus.kind) {
+    case "cell":
+      return args.focus.index === args.index
+    case "row":
+      return args.focus.index === row
+    case "column":
+      return args.focus.index === column
+    case "box":
+      return (
+        args.focus.index === Math.floor(row / 3) * 3 + Math.floor(column / 3)
+      )
+    case "digit":
+      return args.values[args.index] === args.focus.index
+  }
+}
+
+function SudokuSetupPanel({
+  generationError,
+  isGenerating,
+  isReady,
+  isStarting,
+  onSelectDifficulty,
+  onStart,
+  selectedDifficulty,
+}: {
+  generationError: string | null
+  isGenerating: boolean
+  isReady: boolean
+  isStarting: boolean
+  onSelectDifficulty: (difficulty: SudokuDifficulty) => void
+  onStart: () => void
+  selectedDifficulty: SudokuDifficulty
+}) {
+  return (
+    <Surface className="p-5 sm:p-6">
+      <div className="space-y-5">
+        <div>
+          <h2 className="text-lg font-semibold">Choose a puzzle</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Pick a difficulty, then start the solo run.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {sudokuDifficulties.map((difficulty) => (
+            <Button
+              key={difficulty}
+              onClick={() => onSelectDifficulty(difficulty)}
+              type="button"
+              variant={
+                selectedDifficulty === difficulty ? "default" : "outline"
+              }
+            >
+              {sudokuDifficultyLabels[difficulty]}
+            </Button>
+          ))}
+        </div>
+        <div className="rounded-lg border border-border px-4 py-3 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">Selected difficulty</span>
+            <span className="font-medium">
+              {sudokuDifficultyLabels[selectedDifficulty]}
+            </span>
+          </div>
+        </div>
+        {generationError ? (
+          <p className="text-sm text-destructive">{generationError}</p>
+        ) : isReady ? (
+          <p className="text-sm text-muted-foreground">Puzzle ready.</p>
+        ) : isGenerating ? (
+          <p className="text-sm text-muted-foreground">
+            Generating on your device. Master and Extreme can take a few
+            seconds.
+          </p>
+        ) : null}
+        <Button
+          className="w-full sm:w-auto"
+          disabled={isStarting}
+          onClick={onStart}
+          type="button"
+        >
+          {isStarting ? "Preparing puzzle..." : "Start puzzle"}
+        </Button>
+      </div>
+    </Surface>
+  )
+}
+
+function SudokuCompletionPanel({
+  difficulty,
+  onChangeDifficulty,
+  onRestart,
+  timeLabel,
+}: {
+  difficulty: SudokuDifficulty
+  onChangeDifficulty: () => void
+  onRestart: () => void
+  timeLabel: string
+}) {
+  return (
+    <Surface className="p-5 sm:p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Puzzle solved.</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            The board is complete.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={onRestart} type="button">
+            Play again
+          </Button>
+          <Button onClick={onChangeDifficulty} type="button" variant="outline">
+            Change difficulty
+          </Button>
+        </div>
+      </div>
+      <dl className="mt-5 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-2">
+        {[
+          ["Result", "Solved"],
+          ["Time", timeLabel],
+          ["Difficulty", sudokuDifficultyLabels[difficulty]],
+          ["Mode", "Local"],
+        ].map(([term, value]) => (
+          <div key={term} className="space-y-1">
+            <dt className="text-muted-foreground">{term}</dt>
+            <dd className="font-medium">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </Surface>
+  )
+}
+
+function SudokuCompletedBoard({ game }: { game: SudokuGameState }) {
+  return (
+    <Surface className="p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[min(100vw-1.5rem,24rem)]">
+        <div className="grid grid-cols-9 border-2 border-foreground/90 bg-border/50">
+          {game.cells.map((cell, index) => {
+            const row = Math.floor(index / 9)
+            const column = index % 9
+
+            return (
+              <div
+                key={index}
+                className={cn(
+                  "flex aspect-square items-center justify-center border border-border text-sm sm:text-base",
+                  row === 2 || row === 5 ? "border-b-2 border-b-foreground/90" : "",
+                  column === 2 || column === 5 ? "border-r-2 border-r-foreground/90" : "",
+                  cell.fixed ? "bg-muted/35 font-semibold text-foreground" : "bg-background text-foreground"
+                )}
+              >
+                {cell.value}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </Surface>
+  )
+}
+
 export function SudokuPage() {
-  const [session, setSession] = useState(() => createSudokuSession("medium"))
+  const storedPreferences = readAppPreferences()
+  const workerRef = useRef<Worker | null>(null)
+  const nextGenerationIdRef = useRef(0)
+  const activeGenerationRef = useRef<{
+    difficulty: SudokuDifficulty
+    id: number
+  } | null>(null)
+  const pendingStartDifficultyRef = useRef<SudokuDifficulty | null>(null)
+  const requestPuzzleGenerationRef = useRef<(difficulty: SudokuDifficulty) => void>(
+    () => {}
+  )
+  const [selectedDifficulty, setSelectedDifficulty] =
+    useState<SudokuDifficulty>(storedPreferences.games.sudoku.solo.difficulty)
+  const [session, setSession] = useState(() =>
+    createIdleSudokuSession(storedPreferences.games.sudoku.solo.difficulty)
+  )
+  const [hasStarted, setHasStarted] = useState(false)
+  const [preparedPuzzle, setPreparedPuzzle] = useState<SudokuPuzzle | null>(
+    null
+  )
+  const [pendingStartDifficulty, setPendingStartDifficulty] =
+    useState<SudokuDifficulty | null>(null)
+  const [preparingDifficulty, setPreparingDifficulty] =
+    useState<SudokuDifficulty | null>(null)
+  const [generationError, setGenerationError] = useState<string | null>(null)
+  const [mode, setMode] = useState<EntryMode>("fill")
+  const [focusKind, setFocusKind] = useState<FocusKind>("cell")
+  const [focuses, setFocuses] = useState<FocusMark[]>([])
+  const [activeDigit, setActiveDigit] = useState<number | null>(null)
+  const [minimalView, setMinimalView] = useState(false)
+  const [fillInput, setFillInput] = useState<SudokuInputPreference>(
+    storedPreferences.games.sudoku.controls.fillInput
+  )
+  const [notesInput, setNotesInput] = useState<SudokuInputPreference>(
+    storedPreferences.games.sudoku.controls.notesInput
+  )
 
   const values = useMemo(
     () => session.game.cells.map((cell) => cell.value),
@@ -85,27 +527,173 @@ export function SudokuPage() {
   const relatedSet = useMemo(
     () =>
       new Set(
-        session.selectedIndex === null ? [] : getRelatedIndices(session.selectedIndex)
+        session.selectedIndex === null
+          ? []
+          : getRelatedIndices(session.selectedIndex)
       ),
     [session.selectedIndex]
   )
   const progress = useMemo(() => getProgress(session.game), [session.game])
   const solved = useMemo(() => isSudokuSolved(session.game), [session.game])
-
   const selectedCell =
-    session.selectedIndex === null ? null : session.game.cells[session.selectedIndex] ?? null
+    session.selectedIndex === null
+      ? null
+      : (session.game.cells[session.selectedIndex] ?? null)
   const selectedValue = selectedCell?.value ?? 0
-  const selectedIsEditable = selectedCell ? !selectedCell.fixed : false
-  const statusLabel = solved
-    ? "Solved"
-    : session.startedAt === null
-      ? "Ready"
-      : progress.emptyCells === 0
-        ? "Needs review"
-        : "In progress"
+  const activeOptionSectionClass =
+    mode === "focus"
+      ? "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2"
+      : "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2"
+  const usesStickyDigitSelection =
+    mode === "focus" ||
+    (mode === "fill" && fillInput === "number_first") ||
+    (mode === "notes" && notesInput === "number_first")
+  const timeLabel = formatElapsed(session.elapsedMs)
+  const selectedPuzzleReady = preparedPuzzle?.difficulty === selectedDifficulty
+  const selectedPuzzlePreparing = preparingDifficulty === selectedDifficulty
+  const selectedPuzzleStarting = pendingStartDifficulty === selectedDifficulty
+  const modeButtons = [
+    { icon: Square, label: "Fill", value: "fill" },
+    { icon: PencilSimple, label: "Notes", value: "notes" },
+  ] as const
+  const focusTargets = [
+    { label: "Cell", value: "cell" },
+    { label: "Row", value: "row" },
+    { label: "Col", value: "column" },
+    { label: "Box", value: "box" },
+    { label: "Digit", value: "digit" },
+  ] as const
 
   useEffect(() => {
-    if (session.startedAt === null || solved) {
+    pendingStartDifficultyRef.current = pendingStartDifficulty
+  }, [pendingStartDifficulty])
+
+  useEffect(() => {
+    return () => {
+      workerRef.current?.terminate()
+      workerRef.current = null
+      activeGenerationRef.current = null
+    }
+  }, [])
+
+  function handleGeneratedPuzzle(response: GenerateSudokuPuzzleResponse) {
+    const activeGeneration = activeGenerationRef.current
+    const pendingDifficulty = pendingStartDifficultyRef.current
+
+    if (!activeGeneration || activeGeneration.id !== response.id) {
+      return
+    }
+
+    activeGenerationRef.current = null
+    setPreparingDifficulty(null)
+
+    if ("error" in response) {
+      setGenerationError(response.error)
+
+      if (pendingDifficulty === response.difficulty) {
+        pendingStartDifficultyRef.current = null
+        setPendingStartDifficulty(null)
+      }
+
+      return
+    }
+
+    if (pendingDifficulty === response.difficulty) {
+      pendingStartDifficultyRef.current = null
+      setPendingStartDifficulty(null)
+      resetInteractionState()
+      setPreparedPuzzle(null)
+      setSelectedDifficulty(response.puzzle.difficulty)
+      setSession(createSudokuSessionFromPuzzle(response.puzzle))
+      setHasStarted(true)
+      requestPuzzleGeneration(response.puzzle.difficulty, true)
+      return
+    }
+
+    setPreparedPuzzle(response.puzzle)
+    setGenerationError(null)
+  }
+
+  function createGenerationWorker() {
+    const worker = new Worker(
+      new URL("./sudoku-generator.worker.ts", import.meta.url),
+      { type: "module" }
+    )
+
+    worker.addEventListener(
+      "message",
+      (event: MessageEvent<GenerateSudokuPuzzleResponse>) => {
+        handleGeneratedPuzzle(event.data)
+      }
+    )
+    workerRef.current = worker
+    return worker
+  }
+
+  function requestPuzzleGeneration(
+    difficulty: SudokuDifficulty,
+    force = false
+  ) {
+    if (!force && preparedPuzzle?.difficulty === difficulty) {
+      return
+    }
+
+    if (activeGenerationRef.current?.difficulty === difficulty && !force) {
+      return
+    }
+
+    if (activeGenerationRef.current) {
+      workerRef.current?.terminate()
+      workerRef.current = null
+      activeGenerationRef.current = null
+    }
+
+    const worker = workerRef.current ?? createGenerationWorker()
+
+    const id = nextGenerationIdRef.current + 1
+    nextGenerationIdRef.current = id
+    activeGenerationRef.current = { difficulty, id }
+    setPreparingDifficulty(difficulty)
+    setGenerationError(null)
+
+    worker.postMessage({
+      difficulty,
+      id,
+      seed: createSeed(),
+    })
+  }
+
+  useEffect(() => {
+    requestPuzzleGenerationRef.current = requestPuzzleGeneration
+  })
+
+  useEffect(() => {
+    updateAppPreferences((current) => ({
+      ...current,
+      games: {
+        ...current.games,
+        sudoku: {
+          ...current.games.sudoku,
+          controls: {
+            fillInput,
+            notesInput,
+          },
+          solo: {
+            difficulty: selectedDifficulty,
+          },
+        },
+      },
+    }))
+  }, [fillInput, notesInput, selectedDifficulty])
+
+  useEffect(() => {
+    if (!preparedPuzzle || preparedPuzzle.difficulty !== selectedDifficulty) {
+      requestPuzzleGenerationRef.current(selectedDifficulty)
+    }
+  }, [preparedPuzzle, selectedDifficulty])
+
+  useEffect(() => {
+    if (!hasStarted || session.startedAt === null || solved) {
       return undefined
     }
 
@@ -118,10 +706,61 @@ export function SudokuPage() {
     }, 250)
 
     return () => window.clearInterval(interval)
-  }, [session.startedAt, solved])
+  }, [hasStarted, session.startedAt, solved])
 
-  function startNewGame(nextDifficulty = session.difficulty) {
-    setSession(createSudokuSession(nextDifficulty))
+  useEffect(() => {
+    if (!usesStickyDigitSelection && activeDigit !== null) {
+      setActiveDigit(null)
+    }
+  }, [activeDigit, usesStickyDigitSelection])
+
+  useEffect(() => {
+    if (!minimalView) {
+      return undefined
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [minimalView])
+
+  function resetInteractionState() {
+    setActiveDigit(null)
+    setFocuses([])
+    setMode("fill")
+    setFocusKind("cell")
+    setMinimalView(false)
+  }
+
+  function startSessionWithPuzzle(puzzle: SudokuPuzzle) {
+    resetInteractionState()
+    setPreparedPuzzle(null)
+    setSelectedDifficulty(puzzle.difficulty)
+    setSession(createSudokuSessionFromPuzzle(puzzle))
+    setHasStarted(true)
+    requestPuzzleGeneration(puzzle.difficulty, true)
+  }
+
+  function startNewGame(nextDifficulty = selectedDifficulty) {
+    setSelectedDifficulty(nextDifficulty)
+
+    if (preparedPuzzle?.difficulty === nextDifficulty) {
+      startSessionWithPuzzle(preparedPuzzle)
+      return
+    }
+
+    setPendingStartDifficulty(nextDifficulty)
+    requestPuzzleGeneration(nextDifficulty, true)
+  }
+
+  function openSetup() {
+    resetInteractionState()
+    setPendingStartDifficulty(null)
+    setSession(createIdleSudokuSession(selectedDifficulty))
+    setHasStarted(false)
   }
 
   function updateGame(updater: (game: SudokuGameState) => SudokuGameState) {
@@ -139,34 +778,58 @@ export function SudokuPage() {
         ...current,
         elapsedMs: completed ? Date.now() - nextStartedAt : current.elapsedMs,
         game: nextGame,
+        history: [...current.history, current.game],
         startedAt: nextStartedAt,
       }
     })
   }
 
-  function applyDigit(value: number) {
-    if (session.selectedIndex === null) {
-      return
-    }
-
-    updateGame((game) =>
-      session.notesMode
-        ? toggleCellNote(game, session.selectedIndex!, value)
-        : setCellValue(game, session.selectedIndex!, value)
-    )
-  }
-
-  function clearSelectedCell() {
-    if (session.selectedIndex === null) {
-      return
-    }
-
-    updateGame((game) => clearCellValue(game, session.selectedIndex!))
-  }
-
-  function moveSelection(key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight") {
+  function undoLastMove() {
     setSession((current) => {
-      const start = current.selectedIndex ?? findFirstEditableIndex(current.game)
+      const previousGame = current.history[current.history.length - 1]
+
+      if (!previousGame) {
+        return current
+      }
+
+      return {
+        ...current,
+        game: previousGame,
+        history: current.history.slice(0, -1),
+      }
+    })
+  }
+
+  function runCellAction(
+    action: "clear" | "set" | "toggle_note",
+    index: number,
+    value?: number
+  ) {
+    updateGame((game) => {
+      if (action === "clear") {
+        return clearCellValue(game, index)
+      }
+
+      if (action === "toggle_note") {
+        return toggleCellNote(game, index, value ?? 0)
+      }
+
+      const nextGame = setCellValue(game, index, value ?? 0)
+
+      return clearDigitFromRelatedNotes({
+        game: nextGame,
+        index,
+        value: nextGame.cells[index]?.value ?? 0,
+      })
+    })
+  }
+
+  function moveSelection(
+    key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+  ) {
+    setSession((current) => {
+      const start =
+        current.selectedIndex ?? findFirstEditableIndex(current.game)
 
       if (start === -1 || start === null) {
         return current
@@ -191,25 +854,102 @@ export function SudokuPage() {
     })
   }
 
-  const handleKeyboardDigit = useEffectEvent((value: number) => {
-    applyDigit(value)
+  function handleBoardClick(index: number) {
+    setSession((current) => ({ ...current, selectedIndex: index }))
+
+    if (mode === "focus") {
+      if (focusKind === "digit") {
+        return
+      }
+
+      setFocuses((current) =>
+        toggleFocusMark(current, buildFocusForCell(index, focusKind))
+      )
+      return
+    }
+
+    if (
+      mode === "notes" &&
+      notesInput === "number_first" &&
+      activeDigit !== null
+    ) {
+      runCellAction("toggle_note", index, activeDigit)
+      return
+    }
+
+    if (
+      mode === "fill" &&
+      fillInput === "number_first" &&
+      activeDigit !== null
+    ) {
+      runCellAction("set", index, activeDigit)
+    }
+  }
+
+  function handleDigitPress(digit: number) {
+    if (mode === "focus") {
+      setActiveDigit(digit)
+      setFocuses((current) =>
+        toggleFocusMark(current, {
+          kind: "digit",
+          index: digit,
+        })
+      )
+      return
+    }
+
+    if (mode === "notes") {
+      const nextNoteInput = resolveNotesDigitInput({
+        activeDigit,
+        digit,
+        notesInput,
+        selectedIndex: session.selectedIndex,
+      })
+
+      setActiveDigit(nextNoteInput.nextActiveDigit)
+
+      if (nextNoteInput.shouldToggleSelectedCell && session.selectedIndex !== null) {
+        runCellAction("toggle_note", session.selectedIndex, digit)
+      }
+
+      return
+    }
+
+    if (fillInput === "number_first") {
+      setActiveDigit((current) => (current === digit ? null : digit))
+      return
+    }
+
+    setActiveDigit(digit)
+
+    if (session.selectedIndex !== null) {
+      runCellAction("set", session.selectedIndex, digit)
+    }
+  }
+
+  const handleKeyboardDigit = useEffectEvent((digit: number) => {
+    handleDigitPress(digit)
   })
-  const handleKeyboardClear = useEffectEvent(() => {
-    clearSelectedCell()
-  })
+
   const handleKeyboardMove = useEffectEvent(
     (key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight") => {
       moveSelection(key)
     }
   )
-  const handleKeyboardNotesToggle = useEffectEvent(() => {
-    setSession((current) => ({
-      ...current,
-      notesMode: !current.notesMode,
-    }))
+
+  const handleKeyboardClear = useEffectEvent(() => {
+    if (session.selectedIndex === null) {
+      return
+    }
+
+    runCellAction("clear", session.selectedIndex)
   })
 
   useEffect(() => {
+    if (!hasStarted || solved) {
+      return undefined
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (event.altKey || event.ctrlKey || event.metaKey) {
         return
@@ -224,12 +964,6 @@ export function SudokuPage() {
           target.tagName === "SELECT" ||
           target.tagName === "TEXTAREA")
       ) {
-        return
-      }
-
-      if (event.key === "Backspace" || event.key === "Delete" || event.key === "0") {
-        event.preventDefault()
-        handleKeyboardClear()
         return
       }
 
@@ -250,70 +984,195 @@ export function SudokuPage() {
         return
       }
 
+      if (
+        event.key === "Backspace" ||
+        event.key === "Delete" ||
+        event.key.toLowerCase() === "c" ||
+        event.key === "0"
+      ) {
+        event.preventDefault()
+        handleKeyboardClear()
+        return
+      }
+
+      if (event.key.toLowerCase() === "u") {
+        event.preventDefault()
+        undoLastMove()
+        return
+      }
+
       if (event.key.toLowerCase() === "n") {
         event.preventDefault()
-        handleKeyboardNotesToggle()
+        setMode("notes")
+        return
+      }
+
+      if (event.key.toLowerCase() === "f") {
+        event.preventDefault()
+        setMode("fill")
+        return
+      }
+
+      if (event.key.toLowerCase() === "h") {
+        event.preventDefault()
+        setMode("focus")
+        return
+      }
+
+      if (event.key.toLowerCase() === "t") {
+        event.preventDefault()
+        setMode((current) =>
+          current === "fill" ? "notes" : current === "notes" ? "focus" : "fill"
+        )
+        return
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault()
+        setActiveDigit(null)
       }
     }
 
     window.addEventListener("keydown", handleKeyDown)
 
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [])
+  }, [hasStarted, solved])
+
+  if (!hasStarted) {
+    return (
+      <Page className="mx-auto max-w-2xl">
+        <PageHeader
+          title="Sudoku"
+          description="Choose a puzzle, then start."
+          actions={
+            <Button asChild type="button" variant="outline">
+              <Link to="/games/sudoku/extreme-catalog">Extreme catalog</Link>
+            </Button>
+          }
+        />
+        <SudokuSetupPanel
+          generationError={selectedPuzzlePreparing ? null : generationError}
+          isGenerating={selectedPuzzlePreparing}
+          isReady={selectedPuzzleReady}
+          isStarting={selectedPuzzleStarting}
+          onSelectDifficulty={setSelectedDifficulty}
+          onStart={() => startNewGame(selectedDifficulty)}
+          selectedDifficulty={selectedDifficulty}
+        />
+      </Page>
+    )
+  }
+
+  if (solved) {
+    return (
+      <Page className="mx-auto max-w-4xl">
+        <PageHeader title="Sudoku" />
+        <div className="space-y-6">
+          <SudokuCompletionPanel
+            difficulty={session.difficulty}
+            onChangeDifficulty={openSetup}
+            onRestart={() => startNewGame(session.difficulty)}
+            timeLabel={timeLabel}
+          />
+          <SudokuCompletedBoard game={session.game} />
+        </div>
+      </Page>
+    )
+  }
+
+  const boardClassName = "max-w-[min(100vw-1rem,50rem)]"
 
   return (
-    <Page>
-      <PageHeader
-        title="Sudoku"
-        description="Classic solo Sudoku with seeded puzzle generation, note-taking, keyboard controls, and four difficulty presets."
-        actions={
-          <Button type="button" onClick={() => startNewGame()}>
-            New puzzle
-          </Button>
-        }
-      />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,42rem)_minmax(18rem,1fr)]">
-        <Surface className="overflow-hidden p-4 sm:p-5">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="rounded-md border border-border px-2 py-1 font-medium">
-              {statusLabel}
-            </span>
-            <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
-              {difficultyLabels[session.difficulty]}
-            </span>
-            <span className="rounded-md border border-border px-2 py-1 font-mono text-muted-foreground">
-              {formatElapsed(session.elapsedMs)}
-            </span>
-            <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
-              Filled {progress.filledCells}/81
-            </span>
-            <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
-              Errors {incorrectSet.size}
-            </span>
+    <Page
+      className={cn(
+        minimalView
+          ? "fixed inset-0 z-50 min-h-0 space-y-0 bg-background"
+          : "mx-auto max-w-5xl"
+      )}
+    >
+      {!minimalView ? (
+        <PageHeader
+          title="Sudoku"
+          actions={
+            <Button type="button" onClick={openSetup} variant="outline">
+              Change difficulty
+            </Button>
+          }
+        />
+      ) : null}
+      <Surface
+        className={cn(
+          minimalView
+            ? "flex h-full min-h-0 flex-col rounded-none border-0 p-2 sm:p-3"
+            : "p-3 sm:p-4"
+        )}
+      >
+        <div
+          className={cn(
+            "space-y-3",
+            minimalView && "flex h-full min-h-0 flex-col space-y-2"
+          )}
+        >
+          <div className="flex min-h-8 items-center justify-between gap-3 border-b border-border pb-1.5 text-sm">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+              <span className="font-medium">{timeLabel}</span>
+              <span className="text-muted-foreground">Solo</span>
+              <span className="text-muted-foreground">
+                {sudokuDifficultyLabels[session.difficulty]}
+              </span>
+              <span className="text-muted-foreground">
+                {session.startedAt === null ? "Ready" : "Live"}
+              </span>
+            </div>
+            <button
+              aria-label={minimalView ? "Exit focus view" : "Enter focus view"}
+              type="button"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-foreground transition-colors hover:bg-muted"
+              onClick={() => setMinimalView((current) => !current)}
+            >
+              {minimalView ? (
+                <ArrowsInSimple size={16} />
+              ) : (
+                <ArrowsOutSimple size={16} />
+              )}
+            </button>
           </div>
-          <div className="mt-4">
-            <div className="mx-auto max-w-[38rem]">
+
+          <div
+            className={cn(
+              minimalView
+                ? "min-h-0 flex-1 overflow-auto pt-5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                : ""
+            )}
+          >
+            <div
+              className={cn(
+                minimalView
+                  ? "mx-auto flex w-max justify-center"
+                  : "mx-auto w-full",
+                boardClassName
+              )}
+            >
               <div className="grid grid-cols-9 border-2 border-foreground/90 bg-border/50">
                 {session.game.cells.map((cell, index) => {
                   const row = Math.floor(index / 9)
                   const column = index % 9
                   const isSelected = index === session.selectedIndex
                   const isRelated = relatedSet.has(index)
-                  const matchesSelection =
-                    selectedValue !== 0 && cell.value === selectedValue
-                  const hasConflict = conflictSet.has(index)
-                  const isIncorrect = incorrectSet.has(index)
+                  const matchesDigit =
+                    (selectedValue !== 0 && cell.value === selectedValue) ||
+                    (activeDigit !== null && cell.value === activeDigit)
+                  const matchesFocusMark = focuses.some((focus) =>
+                    matchesFocus({ focus, index, values })
+                  )
 
                   return (
                     <button
                       key={index}
                       type="button"
-                      onClick={() =>
-                        setSession((current) => ({ ...current, selectedIndex: index }))
-                      }
-                      aria-label={`Row ${row + 1} column ${column + 1}`}
+                      onClick={() => handleBoardClick(index)}
                       className={cn(
-                        "relative flex aspect-square items-center justify-center border border-border text-base transition-colors sm:text-lg",
+                        "relative flex aspect-square items-center justify-center overflow-hidden border border-border text-sm transition-colors sm:text-base",
                         row === 2 || row === 5
                           ? "border-b-2 border-b-foreground/90"
                           : "",
@@ -322,22 +1181,29 @@ export function SudokuPage() {
                           : "",
                         cell.fixed
                           ? "bg-muted/35 font-semibold text-foreground"
-                          : "bg-background text-foreground hover:bg-muted/50",
+                          : "bg-background text-foreground",
                         isRelated ? "bg-muted/60" : "",
-                        matchesSelection ? "bg-primary/10" : "",
-                        isSelected ? "ring-2 ring-inset ring-primary" : "",
-                        hasConflict ? "text-destructive" : "",
-                        isIncorrect ? "text-amber-700 dark:text-amber-300" : ""
+                        matchesDigit ? "bg-primary/10" : "",
+                        matchesFocusMark ? "bg-amber-500/15" : "",
+                        isSelected ? "ring-2 ring-primary ring-inset" : "",
+                        conflictSet.has(index) ? "text-destructive" : "",
+                        incorrectSet.has(index)
+                          ? "text-amber-700 dark:text-amber-300"
+                          : ""
                       )}
                     >
                       {cell.value !== 0 ? (
                         <span>{cell.value}</span>
                       ) : (
-                        <span className="grid grid-cols-3 gap-px text-[9px] leading-none text-muted-foreground sm:text-[10px]">
+                        <span className="grid h-full w-full grid-cols-3 place-items-center px-[1px] py-[2px] font-mono text-[10px] leading-none text-muted-foreground sm:text-xs">
                           {DIGIT_OPTIONS.map((digit) => (
                             <span
                               key={digit}
-                              className={cell.notes.includes(digit) ? "opacity-100" : "opacity-0"}
+                              className={
+                                cell.notes.includes(digit)
+                                  ? "opacity-100"
+                                  : "opacity-0"
+                              }
                             >
                               {digit}
                             </span>
@@ -350,95 +1216,220 @@ export function SudokuPage() {
               </div>
             </div>
           </div>
-          <div className="mt-4 text-sm leading-6 text-muted-foreground">
-            {solved
-              ? `Solved in ${formatElapsed(session.elapsedMs)}.`
-              : "Select a cell, use the number pad or keyboard, and toggle notes when you want pencil marks instead of committed entries."}
-          </div>
-        </Surface>
 
-        <div className="space-y-6">
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Game setup</h2>
-            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-              {sudokuDifficulties.map((difficulty) => (
+          <div
+            className={cn(
+              "shrink-0 space-y-1.5",
+              minimalView ? "" : "border-t border-border pt-2"
+            )}
+          >
+            <div className="flex items-center justify-center gap-6">
+              <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                {modeButtons.map((option) => {
+                  const Icon = option.icon
+
+                  return (
+                    <Button
+                      key={option.value}
+                      size="icon"
+                      type="button"
+                      className="h-10 w-10"
+                      variant={mode === option.value ? "default" : "outline"}
+                      onClick={() => setMode(option.value as EntryMode)}
+                      aria-label={option.label}
+                      title={option.label}
+                    >
+                      <Icon size={14} />
+                    </Button>
+                  )
+                })}
+              </div>
+              <div className="flex rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
                 <Button
-                  key={difficulty}
+                  size="icon"
                   type="button"
-                  variant={difficulty === session.difficulty ? "default" : "outline"}
-                  onClick={() => startNewGame(difficulty)}
+                  className="h-10 w-10"
+                  variant={mode === "focus" ? "default" : "outline"}
+                  onClick={() => setMode("focus")}
+                  aria-label="Focus"
+                  title="Focus"
                 >
-                  {difficultyLabels[difficulty]}
+                  <Crosshair size={14} />
                 </Button>
-              ))}
-            </div>
-            <div className="mt-5 divide-y divide-border text-sm">
-              {[
-                ["Clues", String(progress.clueCount)],
-                ["Empty cells", String(progress.emptyCells)],
-                ["Errors", String(incorrectSet.size)],
-                ["Selected", selectedCell ? `R${Math.floor((session.selectedIndex ?? 0) / 9) + 1} C${((session.selectedIndex ?? 0) % 9) + 1}` : "None"],
-              ].map(([label, value]) => (
-                <div key={label} className="flex items-center justify-between py-3">
-                  <span className="text-muted-foreground">{label}</span>
-                  <span className="font-medium">{value}</span>
-                </div>
-              ))}
-            </div>
-          </Surface>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2">
+                <Button
+                  size="icon"
+                  type="button"
+                  variant="outline"
+                  disabled={session.history.length === 0}
+                  className="h-10 w-10"
+                  onClick={undoLastMove}
+                  aria-label="Undo"
+                  title="Undo"
+                >
+                  <ArrowCounterClockwise size={14} />
+                </Button>
+                <Button
+                  size="icon"
+                  type="button"
+                  variant="outline"
+                  disabled={session.selectedIndex === null}
+                  className="h-10 w-10"
+                  onClick={() => {
+                    if (session.selectedIndex === null) {
+                      return
+                    }
 
-          <Surface className="p-5">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">Entry</h2>
-              <Button
-                type="button"
-                size="sm"
-                variant={session.notesMode ? "default" : "outline"}
-                onClick={() =>
-                  setSession((current) => ({
-                    ...current,
-                    notesMode: !current.notesMode,
-                  }))
-                }
-              >
-                Notes {session.notesMode ? "on" : "off"}
-              </Button>
+                    runCellAction("clear", session.selectedIndex)
+                  }}
+                  aria-label="Clear"
+                  title="Clear"
+                >
+                  <Backspace size={14} />
+                </Button>
+              </div>
             </div>
-            <div className="mt-4 grid grid-cols-3 gap-2">
+
+            <div className="mx-auto flex w-full max-w-[24rem] justify-center gap-1.5 py-4">
               {DIGIT_OPTIONS.map((digit) => (
                 <Button
                   key={digit}
                   type="button"
-                  variant="outline"
-                  className="h-12 text-base"
-                  onClick={() => applyDigit(digit)}
+                  className="h-10 w-10 rounded-md px-0 text-base"
+                  variant={
+                    usesStickyDigitSelection && activeDigit === digit
+                      ? "default"
+                      : "outline"
+                  }
+                  onClick={() => handleDigitPress(digit)}
                 >
                   {digit}
                 </Button>
               ))}
             </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!selectedIsEditable}
-                onClick={clearSelectedCell}
-              >
-                Clear cell
-              </Button>
-              <Button type="button" variant="outline" onClick={() => startNewGame()}>
-                Regenerate
-              </Button>
+
+            <div className="min-h-10">
+              {mode === "focus" ? (
+                <div
+                  className={cn(
+                    "mx-auto flex w-fit flex-wrap items-center justify-center gap-2",
+                    activeOptionSectionClass
+                  )}
+                >
+                  {focusTargets.map((option) => (
+                    <Button
+                      key={option.value}
+                      size="icon"
+                      type="button"
+                      className="h-10 w-10"
+                      variant={
+                        focusKind === option.value ? "default" : "outline"
+                      }
+                      aria-label={option.label}
+                      onClick={() => setFocusKind(option.value)}
+                      title={option.label}
+                    >
+                      <FocusKindIcon kind={option.value} />
+                    </Button>
+                  ))}
+                  {focuses.length > 0 ? (
+                    <Button
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      className="h-10 px-3 text-sm"
+                      onClick={() => setFocuses([])}
+                    >
+                      Clear all
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <div
+                  className={cn(
+                    "mx-auto flex w-fit flex-wrap items-center justify-center gap-2 text-sm",
+                    activeOptionSectionClass
+                  )}
+                >
+                  {[
+                    { label: "Cell", value: "cell_first" },
+                    { label: "Number", value: "number_first" },
+                  ].map((option) => (
+                    <Button
+                      key={option.value}
+                      size="sm"
+                      type="button"
+                      className="h-10 px-3 text-sm"
+                      variant={
+                        (mode === "fill" ? fillInput : notesInput) ===
+                        option.value
+                          ? "default"
+                          : "outline"
+                      }
+                      onClick={() =>
+                        mode === "fill"
+                          ? setFillInput(option.value as SudokuInputPreference)
+                          : setNotesInput(option.value as SudokuInputPreference)
+                      }
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </div>
-            <p className="mt-4 text-sm leading-6 text-muted-foreground">
-              Keyboard: <span className="font-mono">1-9</span> to enter,{" "}
-              <span className="font-mono">N</span> to toggle notes,{" "}
-              <span className="font-mono">Backspace</span> to clear, arrow keys to
-              move.
-            </p>
-          </Surface>
+          </div>
+
+          {!minimalView ? (
+            <div className="border-t border-border pt-3">
+              <div className="space-y-2 text-sm">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border px-3 py-2">
+                  <span className="font-medium">You</span>
+                  <span className="text-muted-foreground">
+                    {session.startedAt === null ? "Ready" : "In progress"}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {sudokuDifficultyLabels[session.difficulty]}
+                  </span>
+                  <span className="text-muted-foreground">
+                    Filled {progress.filledCells}/81
+                  </span>
+                  <span className="text-muted-foreground">
+                    Errors {incorrectSet.size}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {session.selectedIndex === null
+                      ? "No selection"
+                      : `R${Math.floor(session.selectedIndex / 9) + 1} C${(session.selectedIndex % 9) + 1}`}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                <Button
+                  size="sm"
+                  type="button"
+                  onClick={() => startNewGame(session.difficulty)}
+                >
+                  New puzzle
+                </Button>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={openSetup}
+                >
+                  Change difficulty
+                </Button>
+              </div>
+              <p className="mt-3 text-center text-sm text-muted-foreground">
+                Keyboard: `1-9` enter, arrows move, `N` notes, `F` fill, `H`
+                focus, `C` clear, `U` undo, `T` cycle mode.
+              </p>
+            </div>
+          ) : null}
         </div>
-      </div>
+      </Surface>
     </Page>
   )
 }

@@ -106,6 +106,7 @@ export interface ProfileSummary {
   status: "online" | "available" | "in_game" | "offline"
   presence: "online" | "idle" | "away" | "offline"
   avatarUrl?: string
+  avatarSeed?: string
 }
 
 export interface MatchRulesetEnvelope {

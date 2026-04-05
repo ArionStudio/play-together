@@ -1,4 +1,4 @@
-import { useDeferredValue, useState } from "react"
+import { useDeferredValue, useState, type ReactNode } from "react"
 import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import { SignInButton, useAuth } from "@clerk/clerk-react"
 
@@ -6,28 +6,83 @@ import { Button } from "@workspace/ui/components/button"
 
 import { demoFriends } from "@/lib/demo-data.ts"
 import { usePlatformServices } from "@/app/providers.tsx"
+import { api } from "@convex/api"
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
-import { api } from "../../../convex/_generated/api"
+
+function PresenceLabel({
+  presence,
+  status,
+}: {
+  presence: string
+  status: string
+}) {
+  return (
+    <span className="text-sm text-muted-foreground">
+      {status} · {presence}
+    </span>
+  )
+}
+
+function SectionHeader({
+  description,
+  title,
+}: {
+  description?: string
+  title: string
+}) {
+  return (
+    <div className="space-y-1 border-b border-border px-4 py-4 sm:px-5">
+      <h2 className="text-base font-semibold">{title}</h2>
+      {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+    </div>
+  )
+}
+
+function EmptyState({ message }: { message: string }) {
+  return <p className="px-4 py-4 text-sm text-muted-foreground sm:px-5">{message}</p>
+}
+
+function FriendRow({
+  action,
+  meta,
+  subtitle,
+  title,
+}: {
+  action?: ReactNode
+  meta?: ReactNode
+  subtitle?: ReactNode
+  title: string
+}) {
+  return (
+    <div className="flex flex-col gap-3 px-4 py-4 sm:px-5 md:flex-row md:items-center md:justify-between">
+      <div className="min-w-0 space-y-1">
+        <p className="font-medium">{title}</p>
+        {subtitle ? <div className="text-sm text-muted-foreground">{subtitle}</div> : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-3 md:justify-end">
+        {meta ? <div className="text-sm text-muted-foreground">{meta}</div> : null}
+        {action}
+      </div>
+    </div>
+  )
+}
 
 function FriendsFallback() {
   return (
-    <Page>
-      <PageHeader
-        title="Friends"
-        description="This preview shows sample friend records. Search and invites turn on after platform setup."
-      />
+    <Page className="mx-auto max-w-4xl">
+      <PageHeader title="Friends" description="Sample data only." />
       <Surface className="divide-y divide-border">
+        <SectionHeader
+          title="Friends list"
+          description="Preview data for local mode."
+        />
         {demoFriends.map((friend) => (
-          <div
+          <FriendRow
             key={friend.usernameTag}
-            className="flex flex-col gap-2 px-4 py-4 sm:grid sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center"
-          >
-            <div className="min-w-0">
-              <p className="font-medium">{friend.usernameTag}</p>
-              <p className="mt-1 text-sm text-muted-foreground">{friend.note}</p>
-            </div>
-            <p className="text-sm text-muted-foreground sm:text-right">{friend.status}</p>
-          </div>
+            title={friend.usernameTag}
+            subtitle={friend.note}
+            meta={friend.status}
+          />
         ))}
       </Surface>
     </Page>
@@ -72,7 +127,7 @@ function ConnectedFriendsPage() {
   }
 
   if (sessionStatus === undefined || isConvexLoading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading friends…</div>
+    return <div className="p-6 text-sm text-muted-foreground">Loading friends...</div>
   }
 
   if (!isConvexAuthenticated) {
@@ -80,11 +135,10 @@ function ConnectedFriendsPage() {
       <Page className="mx-auto max-w-xl">
         <PageHeader
           title="Finish Clerk to Convex auth"
-          description="Clerk sign-in succeeded, but Convex is not receiving an authenticated session for social features."
+          description="Clerk signed in, but Convex did not receive the session."
         />
-        <Surface className="p-6 text-sm leading-6 text-muted-foreground">
-          Put `CLERK_JWT_ISSUER_DOMAIN` in `apps/web/.env.convex.local`, run
-          `pnpm --filter web convex:env:sync`, then restart `pnpm dev`.
+        <Surface className="p-6 text-sm text-muted-foreground">
+          Run `pnpm convex:env:sync`, then restart `pnpm dev`.
         </Surface>
       </Page>
     )
@@ -95,51 +149,48 @@ function ConnectedFriendsPage() {
       <Page className="mx-auto max-w-xl">
         <PageHeader
           title="Finish onboarding"
-          description="You need a public profile before using friend search and invites."
+          description="You need a public profile before using friend search."
         />
-        <Surface className="p-6 text-sm leading-6 text-muted-foreground">
-          Open `/onboarding` to reserve your `username#tag`.
+        <Surface className="p-6 text-sm text-muted-foreground">
+          Finish onboarding to continue.
         </Surface>
       </Page>
     )
   }
 
   if (friends === undefined) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading friends…</div>
+    return <div className="p-6 text-sm text-muted-foreground">Loading friends...</div>
   }
 
   return (
-    <Page>
+    <Page className="mx-auto max-w-4xl">
       <PageHeader
         title="Friends"
-        description="Friend identities are built around public username tags instead of private account details."
+        description="Search by username or `username#tag`, accept invites, and keep your active list in one place."
       />
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <Surface className="p-5">
-          <h2 className="text-lg font-semibold">Find players</h2>
-          <label className="mt-4 block space-y-2 text-sm">
-            <span className="font-medium">
-              Enter the exact username or `username#tag`
-            </span>
+      <Surface>
+        <SectionHeader
+          title="Find players"
+          description="Search for an exact username or full `username#tag`."
+        />
+        <div className="px-4 py-4 sm:px-5">
+          <label className="block space-y-2 text-sm">
+            <span className="font-medium">Username or `username#tag`</span>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Exact match, for example Nova#2417"
+              placeholder="Nova#2417"
               className="h-11 w-full rounded-lg border border-input bg-background px-3 outline-none transition-colors focus:border-primary"
             />
           </label>
-          <div className="mt-4 divide-y divide-border">
-            {searchResults?.map((result) => (
-              <div
-                key={result.usernameTag}
-                className="flex items-center justify-between gap-4 py-3"
-              >
-                <div>
-                  <p className="font-medium">{result.usernameTag}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {result.status} · {result.presence}
-                  </p>
-                </div>
+        </div>
+        <div className="divide-y divide-border border-t border-border">
+          {searchResults?.map((result) => (
+            <FriendRow
+              key={result.usernameTag}
+              title={result.usernameTag}
+              subtitle={<PresenceLabel presence={result.presence} status={result.status} />}
+              action={
                 <Button
                   size="sm"
                   variant="outline"
@@ -156,86 +207,99 @@ function ConnectedFriendsPage() {
                 >
                   Invite
                 </Button>
-              </div>
-            ))}
-            {deferredSearch && searchResults?.length === 0 ? (
-              <p className="py-4 text-sm text-muted-foreground">No players matched.</p>
-            ) : null}
-          </div>
-        </Surface>
-        <div className="space-y-6">
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Incoming invites</h2>
-            <div className="mt-4 divide-y divide-border">
-              {friends.incomingInvites.length === 0 ? (
-                <p className="py-1 text-sm text-muted-foreground">No pending invites.</p>
-              ) : (
-                friends.incomingInvites.map((invite) => (
-                  <div
-                    key={invite.inviteId}
-                    className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-medium">{invite.from.usernameTag}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {new Date(invite.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          respondToInvite({
-                            inviteId: invite.inviteId,
-                            action: "accepted",
-                          })
-                        }
-                      >
-                        Accept
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          respondToInvite({
-                            inviteId: invite.inviteId,
-                            action: "declined",
-                          })
-                        }
-                      >
-                        Decline
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </Surface>
-          <Surface className="p-5">
-            <h2 className="text-lg font-semibold">Friends list</h2>
-            <div className="mt-4 divide-y divide-border">
-              {friends.friends.length === 0 ? (
-                <p className="py-1 text-sm text-muted-foreground">No friends yet.</p>
-              ) : (
-                friends.friends.map((friend) => (
-                  <div
-                    key={friend.usernameTag}
-                    className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-medium">{friend.usernameTag}</p>
-                      <p className="text-sm text-muted-foreground">{friend.note}</p>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      {friend.status} · {friend.presence}
-                    </p>
-                  </div>
-                ))
-              )}
-            </div>
-          </Surface>
+              }
+            />
+          ))}
+          {deferredSearch && searchResults?.length === 0 ? (
+            <EmptyState message="No players matched." />
+          ) : null}
+          {!deferredSearch ? (
+            <EmptyState message="Search to send a friend invite." />
+          ) : null}
         </div>
-      </div>
+      </Surface>
+
+      <Surface className="divide-y divide-border">
+        <SectionHeader
+          title="Incoming invites"
+          description="Requests waiting for your response."
+        />
+        {friends.incomingInvites.length === 0 ? (
+          <EmptyState message="No pending invites." />
+        ) : (
+          friends.incomingInvites.map((invite) => (
+            <FriendRow
+              key={invite.inviteId}
+              title={invite.from.usernameTag}
+              subtitle={new Date(invite.createdAt).toLocaleString()}
+              action={
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      respondToInvite({
+                        inviteId: invite.inviteId,
+                        action: "accepted",
+                      })
+                    }
+                  >
+                    Accept
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      respondToInvite({
+                        inviteId: invite.inviteId,
+                        action: "declined",
+                      })
+                    }
+                  >
+                    Decline
+                  </Button>
+                </div>
+              }
+            />
+          ))
+        )}
+      </Surface>
+
+      <Surface className="divide-y divide-border">
+        <SectionHeader
+          title="Sent invites"
+          description="Pending requests you already sent."
+        />
+        {friends.outgoingInvites.length === 0 ? (
+          <EmptyState message="No outgoing invites." />
+        ) : (
+          friends.outgoingInvites.map((invite) => (
+            <FriendRow
+              key={invite.inviteId}
+              title={invite.to.usernameTag}
+              subtitle={new Date(invite.createdAt).toLocaleString()}
+              meta="Pending"
+            />
+          ))
+        )}
+      </Surface>
+
+      <Surface className="divide-y divide-border">
+        <SectionHeader
+          title="Friends list"
+          description={`${friends.friends.length} active connection${friends.friends.length === 1 ? "" : "s"}.`}
+        />
+        {friends.friends.length === 0 ? (
+          <EmptyState message="No friends yet." />
+        ) : (
+          friends.friends.map((friend) => (
+            <FriendRow
+              key={friend.usernameTag}
+              title={friend.usernameTag}
+              meta={<PresenceLabel presence={friend.presence} status={friend.status} />}
+            />
+          ))
+        )}
+      </Surface>
     </Page>
   )
 }

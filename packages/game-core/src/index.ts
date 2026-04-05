@@ -82,6 +82,22 @@ export function formatUsernameTag(username: string, tag: string) {
   return `${username}#${tag}`
 }
 
+export function buildProfileAvatarSeed(value: string) {
+  const normalized = value.trim().toLowerCase()
+
+  if (!normalized) {
+    return "player"
+  }
+
+  let hash = 5381
+
+  for (const character of normalized) {
+    hash = (hash * 33) ^ character.charCodeAt(0)
+  }
+
+  return (hash >>> 0).toString(36)
+}
+
 export function formatDurationMs(durationMs: number) {
   const seconds = Math.floor(durationMs / 1000)
   const tenths = Math.floor((durationMs % 1000) / 100)

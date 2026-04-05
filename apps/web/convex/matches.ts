@@ -15,12 +15,13 @@ import {
   type MinesweeperBoardState,
   type MinesweeperPlayerState,
 } from "@workspace/minesweeper-engine"
+import { purgeMatchEvents, recordCompletedRunIfNeeded } from "./history"
 import { ensureLeaderboardCategory, writeLeaderboardEntryIfNeeded } from "./leaderboards"
 import { resolveSoloMinesweeperSelection } from "./minesweeper"
 import { requireProfile, serializeJson } from "./lib"
 
 function createSeed() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return crypto.randomUUID()
 }
 
 function buildBoardState(match: Doc<"matches">, soloMatch: Doc<"minesweeperMatches">) {
@@ -377,11 +378,16 @@ async function finalizeIfNeeded(
     refreshedParticipant &&
     refreshedMatch.gameKey === "minesweeper"
   ) {
+    await recordCompletedRunIfNeeded(ctx, {
+      match: refreshedMatch,
+      participant: refreshedParticipant,
+    })
     await writeLeaderboardEntryIfNeeded(ctx, {
       match: refreshedMatch,
       participant: refreshedParticipant,
       ruleset: getMinesweeperRuleset(args.soloMatch),
     })
+    await purgeMatchEvents(ctx, refreshedMatch)
   }
 }
 

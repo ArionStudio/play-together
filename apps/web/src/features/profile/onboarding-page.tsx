@@ -5,20 +5,26 @@ import { Navigate, useNavigate } from "react-router-dom"
 import { Button } from "@workspace/ui/components/button"
 
 import { usePlatformServices } from "@/app/providers.tsx"
+import { api } from "@convex/api"
+import { ProfileAvatar } from "@/components/profile-avatar.tsx"
+import {
+  normalizeTagInput,
+  normalizeUsernameInput,
+  validateTagInput,
+  validateUsernameInput,
+} from "@/features/profile/profile-identity.ts"
+import { buildProfilePath } from "@/features/profile/profile-path.ts"
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
-import { api } from "../../../convex/_generated/api"
 
 function OnboardingDisabled() {
   return (
     <Page className="mx-auto max-w-xl">
       <PageHeader
         title="Profile setup"
-        description="The profile flow exists, but Clerk and Convex are not configured in this environment."
+        description="Add the platform env values to enable profile creation."
       />
-      <Surface className="p-6">
-        <p className="text-sm leading-6 text-muted-foreground">
-          Add the platform keys to enable public `username#tag` reservation.
-        </p>
+      <Surface className="p-6 text-sm text-muted-foreground">
+        Open the setup page and finish the Clerk and Convex configuration.
       </Surface>
     </Page>
   )
@@ -29,68 +35,16 @@ function ConvexAuthMisconfigured() {
     <Page className="mx-auto max-w-xl">
       <PageHeader
         title="Finish Clerk to Convex auth"
-        description="Clerk sign-in succeeded, but Convex did not receive an authenticated identity for this session."
+        description="Clerk signed in, but Convex did not receive the session."
       />
-      <Surface className="space-y-4 p-6 text-sm leading-6 text-muted-foreground">
+      <Surface className="space-y-3 p-6 text-sm text-muted-foreground">
         <p>
-          The usual cause is a missing Clerk JWT template named `convex`, or a
-          mismatched `CLERK_JWT_ISSUER_DOMAIN` in the Convex environment.
+          Check the Clerk `convex` JWT template and `CLERK_JWT_ISSUER_DOMAIN`.
         </p>
-        <p>
-          Put the issuer in `apps/web/.env.convex.local`, run
-          `pnpm --filter web convex:env:sync`, then restart `pnpm dev`.
-        </p>
+        <p>Then run `pnpm convex:env:sync` and restart `pnpm dev`.</p>
       </Surface>
     </Page>
   )
-}
-
-function normalizeUsernameInput(value: string) {
-  return value.replace(/#/g, "").replace(/\s+/g, " ").trimStart()
-}
-
-function normalizeTagInput(value: string) {
-  return value.replace(/#/g, "").replace(/\s+/g, "").trim()
-}
-
-function validateUsernameInput(value: string) {
-  const normalized = value.trim()
-
-  if (normalized.length < 3) {
-    return "Username must be at least 3 characters."
-  }
-
-  if (normalized.length > 20) {
-    return "Username must be at most 20 characters."
-  }
-
-  if (normalized.includes("#")) {
-    return "Enter only the username. The #tag is assigned on the server."
-  }
-
-  if (!/^[A-Za-z0-9]+(?:[ _][A-Za-z0-9]+)*$/.test(normalized)) {
-    return "Use letters, numbers, single spaces, and single underscores only."
-  }
-
-  return null
-}
-
-function validateTagInput(value: string) {
-  const normalized = value.trim()
-
-  if (normalized.length < 2) {
-    return "Tag must be at least 2 characters."
-  }
-
-  if (normalized.length > 12) {
-    return "Tag must be at most 12 characters."
-  }
-
-  if (!/^[A-Za-z0-9_]+$/.test(normalized)) {
-    return "Tag may use letters, numbers, and underscores only."
-  }
-
-  return null
 }
 
 function OnboardingConnected() {
@@ -101,11 +55,19 @@ function OnboardingConnected() {
   const [tag, setTag] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const validationError = useMemo(() => validateUsernameInput(username), [username])
+  const validationError = useMemo(
+    () => validateUsernameInput(username),
+    [username]
+  )
   const tagValidationError = useMemo(() => validateTagInput(tag), [tag])
+  const previewUsernameTag = `${username.trim() || "Arion"}#${tag.trim() || "UwU"}`
 
   if (sessionStatus === undefined) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading profile…</div>
+    return (
+      <div className="p-6 text-sm text-muted-foreground">
+        Loading profile...
+      </div>
+    )
   }
 
   if (!sessionStatus.convexAuthenticated) {
@@ -113,7 +75,7 @@ function OnboardingConnected() {
   }
 
   if (sessionStatus.hasProfile && sessionStatus.usernameTag) {
-    return <Navigate to={`/profile/${sessionStatus.usernameTag}`} replace />
+    return <Navigate to={buildProfilePath(sessionStatus.usernameTag)} replace />
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -132,10 +94,12 @@ function OnboardingConnected() {
         username: username.trim(),
         tag: tag.trim(),
       })
-      navigate(`/profile/${nextProfile.usernameTag}`)
+      navigate(buildProfilePath(nextProfile.usernameTag))
     } catch (submitError) {
       const message =
-        submitError instanceof Error ? submitError.message : "Profile creation failed."
+        submitError instanceof Error
+          ? submitError.message
+          : "Profile creation failed."
 
       if (message.includes("Authentication required")) {
         setError(
@@ -153,13 +117,16 @@ function OnboardingConnected() {
     <Page className="mx-auto max-w-xl">
       <PageHeader
         title="Choose your public identity"
-        description="You control the full `username#tag`. The server enforces uniqueness on the combined value."
+        description="Choose the public name used across profiles, friends, and leaderboards."
       />
       <Surface className="p-6">
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
             <div>
-              <label className="mb-2 block text-sm font-medium" htmlFor="username">
+              <label
+                className="mb-2 block text-sm font-medium"
+                htmlFor="username"
+              >
                 Username
               </label>
               <input
@@ -171,7 +138,7 @@ function OnboardingConnected() {
                 }}
                 placeholder="Arion"
                 autoComplete="off"
-                className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+                className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground focus:border-primary"
               />
             </div>
             <div>
@@ -191,24 +158,38 @@ function OnboardingConnected() {
                   }}
                   placeholder="UwU"
                   autoComplete="off"
-                  className="h-11 w-full rounded-lg border border-input bg-background pl-7 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+                  className="h-11 w-full rounded-lg border border-input bg-background pr-3 pl-7 text-sm transition-colors outline-none placeholder:text-muted-foreground focus:border-primary"
                 />
               </div>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Example: `{username.trim() || "Arion"}#{tag.trim() || "UwU"}`
-          </p>
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-3">
+            <ProfileAvatar
+              className="size-12"
+              usernameTag={previewUsernameTag}
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{previewUsernameTag}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                A pixel avatar will be generated automatically when you create
+                the profile.
+              </p>
+            </div>
+          </div>
           {error || validationError || tagValidationError ? (
             <p className="text-sm text-destructive">
               {error ?? validationError ?? tagValidationError}
             </p>
           ) : null}
           <Button
-            disabled={submitting || Boolean(validationError) || Boolean(tagValidationError)}
+            disabled={
+              submitting ||
+              Boolean(validationError) ||
+              Boolean(tagValidationError)
+            }
             type="submit"
           >
-            {submitting ? "Creating profile…" : "Reserve identity"}
+            {submitting ? "Creating profile..." : "Reserve identity"}
           </Button>
         </form>
       </Surface>

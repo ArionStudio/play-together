@@ -9,7 +9,8 @@ import {
   serializeLeaderboardCategoryKey,
 } from "@workspace/game-core"
 import type { RulesetConfig } from "@workspace/game-contracts"
-import { requireProfile } from "./lib"
+import { sudokuDifficultyLabels, type SudokuDifficulty } from "@workspace/sudoku-engine"
+import { getProfilesByIds, requireProfile } from "./lib"
 
 export function categoryKeyForRuleset(ruleset: RulesetConfig) {
   return serializeLeaderboardCategoryKey(buildLeaderboardCategoryKey(ruleset))
@@ -50,7 +51,6 @@ export async function writeLeaderboardEntryIfNeeded(
   }
 ) {
   if (
-    !args.match.ranked ||
     args.match.outcome !== "won" ||
     args.match.completedAt === undefined ||
     typeof args.participant.scorePrimary !== "number"
@@ -88,19 +88,49 @@ export async function writeLeaderboardEntryIfNeeded(
 export const listCategories = query({
   args: {},
   handler: async (ctx) => {
-    const categories = await ctx.db
-      .query("leaderboardCategories")
-      .withIndex("by_game_mode", (query) =>
-        query.eq("gameKey", "minesweeper").eq("modeKey", "solo")
-      )
-      .take(32)
+    const categories = await ctx.db.query("leaderboardCategories").take(64)
 
     return categories.sort((left, right) => {
-      if (left.ranked !== right.ranked) {
-        return left.ranked ? -1 : 1
+      if (left.gameKey !== right.gameKey) {
+        return left.gameKey.localeCompare(right.gameKey)
+      }
+
+      if (left.modeKey !== right.modeKey) {
+        return left.modeKey.localeCompare(right.modeKey)
       }
 
       return left.boardKey.localeCompare(right.boardKey)
+    }).map((category) => {
+      const title = (() => {
+        if (category.gameKey === "sudoku" && category.rulesetKey.startsWith("sudoku:")) {
+          const [, mode, difficulty] = category.rulesetKey.split(":")
+          const difficultyLabel =
+            sudokuDifficultyLabels[
+              ((difficulty as SudokuDifficulty | undefined) ?? "medium")
+            ]
+
+          return `${difficultyLabel} ${mode === "coop" ? "Team Solve" : mode === "race" ? "Duel" : "Solo"}`
+        }
+
+        if (
+          category.gameKey === "minesweeper" &&
+          category.rulesetKey.startsWith("minesweeper:")
+        ) {
+          const [, mode, preset] = category.rulesetKey.split(":")
+          return `${preset ?? category.boardKey} ${mode === "coop" ? "Team Clear" : mode === "race" ? "Race" : "Solo"}`
+        }
+
+        if (category.gameKey === "minesweeper" && category.modeKey === "solo") {
+          return `${category.boardKey} ${category.ranked ? "Ranked Solo" : "Solo"}`
+        }
+
+        return `${category.gameKey} ${category.modeKey}`
+      })()
+
+      return {
+        ...category,
+        title,
+      }
     })
   },
 })
@@ -118,22 +148,18 @@ export const globalByCategory = query({
         query.eq("categoryKey", args.categoryKey)
       )
       .take(limit)
+    const profilesById = await getProfilesByIds(
+      ctx,
+      entries.map((entry) => entry.profileId)
+    )
 
-    const rows = []
-
-    for (const [index, entry] of entries.entries()) {
-      const profile = await ctx.db.get(entry.profileId)
-
-      rows.push({
-        rank: index + 1,
-        usernameTag: profile?.usernameTag ?? "Unknown",
-        scorePrimary: entry.scorePrimary,
-        completedAt: entry.completedAt,
-        boardKey: entry.boardKey,
-      })
-    }
-
-    return rows
+    return entries.map((entry, index) => ({
+      rank: index + 1,
+      usernameTag: profilesById.get(entry.profileId)?.usernameTag ?? "Unknown",
+      scorePrimary: entry.scorePrimary,
+      completedAt: entry.completedAt,
+      boardKey: entry.boardKey,
+    }))
   },
 })
 

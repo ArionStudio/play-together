@@ -1,13 +1,50 @@
 import { v } from "convex/values"
 
+import type { Doc } from "./_generated/dataModel"
+import type { QueryCtx } from "./_generated/server"
 import { mutation, query } from "./_generated/server"
 import {
   buildPairKey,
+  getPresenceRowsByProfileIds,
+  getProfilesByIds,
   getProfileByUsernameTag,
   normalizeUsername,
   requireProfile,
   toPublicProfile,
 } from "./lib"
+
+const ONLINE_FRESHNESS_MS = 180_000
+
+async function getLivePublicProfile(ctx: QueryCtx, profile: Doc<"profiles">) {
+  const presenceRow = await ctx.db
+    .query("presence")
+    .withIndex("by_profileId", (query) => query.eq("profileId", profile._id))
+    .unique()
+  const isFresh =
+    presenceRow !== null && Date.now() - presenceRow.lastSeenAt <= ONLINE_FRESHNESS_MS
+
+  return {
+    ...toPublicProfile(profile),
+    presence: isFresh ? presenceRow.state : "offline",
+    status: isFresh ? presenceRow.status : "offline",
+  }
+}
+
+function toLivePublicProfile(args: {
+  presenceRow: Doc<"presence"> | null
+  profile: Doc<"profiles">
+}) {
+  const presenceRow = args.presenceRow
+  const isFresh =
+    presenceRow !== null &&
+    Date.now() - presenceRow.lastSeenAt <= ONLINE_FRESHNESS_MS
+
+  return {
+    ...toPublicProfile(args.profile),
+    presence: isFresh ? presenceRow.state : "offline",
+    status: isFresh ? presenceRow.status : "offline",
+  }
+}
 
 export const searchProfiles = query({
   args: {
@@ -28,20 +65,32 @@ export const searchProfiles = query({
         return []
       }
 
-      return [toPublicProfile(match)]
+      return [await getLivePublicProfile(ctx, match)]
     }
 
     const normalizedUsername = normalizeUsername(rawQuery).toLowerCase()
     const matches = await ctx.db
       .query("profiles")
       .withIndex("by_usernameLower", (query) =>
-        query.eq("usernameLower", normalizedUsername)
+        query.gte("usernameLower", normalizedUsername)
       )
       .take(10)
+    const filteredMatches = matches.filter(
+      (candidate) =>
+        candidate._id !== profile._id &&
+        candidate.usernameLower.startsWith(normalizedUsername)
+    )
+    const presenceByProfileId = await getPresenceRowsByProfileIds(
+      ctx,
+      filteredMatches.map((candidate) => candidate._id)
+    )
 
-    return matches
-      .filter((candidate) => candidate._id !== profile._id)
-      .map(toPublicProfile)
+    return filteredMatches.map((candidate) =>
+      toLivePublicProfile({
+        presenceRow: presenceByProfileId.get(candidate._id) ?? null,
+        profile: candidate,
+      })
+    )
   },
 })
 
@@ -158,57 +207,73 @@ export const list = query({
         .take(20),
     ])
 
-    const friends = []
-
-    for (const friendship of [...friendshipsA, ...friendshipsB]) {
-      const otherProfileId =
-        friendship.profileAId === profile._id
-          ? friendship.profileBId
-          : friendship.profileAId
-      const otherProfile = await ctx.db.get(otherProfileId)
-
-      if (!otherProfile) {
-        continue
-      }
-
-      friends.push({
-        ...toPublicProfile(otherProfile),
-        note: `${otherProfile.status} · ${otherProfile.presence}`,
-      })
-    }
+    const friendProfileIds = [...friendshipsA, ...friendshipsB].map((friendship) =>
+      friendship.profileAId === profile._id
+        ? friendship.profileBId
+        : friendship.profileAId
+    )
+    const incomingPendingInvites = incomingInvites.filter(
+      (invite) => invite.status === "pending"
+    )
+    const outgoingPendingInvites = outgoingInvites.filter(
+      (invite) => invite.status === "pending"
+    )
+    const relatedProfiles = await getProfilesByIds(ctx, [
+      ...friendProfileIds,
+      ...incomingPendingInvites.map((invite) => invite.fromProfileId),
+      ...outgoingPendingInvites.map((invite) => invite.toProfileId),
+    ])
+    const presenceByProfileId = await getPresenceRowsByProfileIds(
+      ctx,
+      friendProfileIds
+    )
 
     return {
-      friends,
-      incomingInvites: await Promise.all(
-        incomingInvites
-          .filter((invite) => invite.status === "pending")
-          .map(async (invite) => {
-            const sender = await ctx.db.get(invite.fromProfileId)
+      friends: friendProfileIds.flatMap((otherProfileId) => {
+        const otherProfile = relatedProfiles.get(otherProfileId)
 
-            return sender
-              ? {
-                  inviteId: invite._id,
-                  from: toPublicProfile(sender),
-                  createdAt: invite.createdAt,
-                }
-              : null
-          })
-      ).then((rows) => rows.filter((row) => row !== null)),
-      outgoingInvites: await Promise.all(
-        outgoingInvites
-          .filter((invite) => invite.status === "pending")
-          .map(async (invite) => {
-            const recipient = await ctx.db.get(invite.toProfileId)
+        if (!otherProfile) {
+          return []
+        }
 
-            return recipient
-              ? {
-                  inviteId: invite._id,
-                  to: toPublicProfile(recipient),
-                  createdAt: invite.createdAt,
-                }
-              : null
-          })
-      ).then((rows) => rows.filter((row) => row !== null)),
+        const liveProfile = toLivePublicProfile({
+          presenceRow: presenceByProfileId.get(otherProfileId) ?? null,
+          profile: otherProfile,
+        })
+
+        return [
+          {
+            ...liveProfile,
+            note: `${liveProfile.status} · ${liveProfile.presence}`,
+          },
+        ]
+      }),
+      incomingInvites: incomingPendingInvites.flatMap((invite) => {
+        const sender = relatedProfiles.get(invite.fromProfileId)
+
+        return sender
+          ? [
+              {
+                inviteId: invite._id,
+                from: toPublicProfile(sender),
+                createdAt: invite.createdAt,
+              },
+            ]
+          : []
+      }),
+      outgoingInvites: outgoingPendingInvites.flatMap((invite) => {
+        const recipient = relatedProfiles.get(invite.toProfileId)
+
+        return recipient
+          ? [
+              {
+                inviteId: invite._id,
+                to: toPublicProfile(recipient),
+                createdAt: invite.createdAt,
+              },
+            ]
+          : []
+      }),
     }
   },
 })

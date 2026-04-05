@@ -1,4 +1,5 @@
 import { v } from "convex/values"
+import { buildProfileAvatarSeed } from "@workspace/game-core"
 
 import type { Doc } from "./_generated/dataModel"
 import { mutation, query } from "./_generated/server"
@@ -16,20 +17,14 @@ import {
   upsertUser,
 } from "./lib"
 
-function summarizeRun(match: Doc<"matches">, participant: Doc<"matchParticipants">) {
-  const mineCount =
-    match.boardConfig.mineCount ??
-    Math.floor(
-      match.boardConfig.width * match.boardConfig.height * (match.boardConfig.density ?? 0)
-    )
-
+function summarizeRun(run: Doc<"completedRuns">) {
   return {
-    matchId: match._id,
-    outcome: match.outcome ?? "lost",
-    boardKey: `${match.boardConfig.width}x${match.boardConfig.height}:${mineCount}`,
-    ranked: match.ranked,
-    durationMs: match.durationMs ?? participant.scorePrimary ?? null,
-    completedAt: match.completedAt ?? match.startedAt,
+    matchId: run.matchId,
+    outcome: run.outcome,
+    boardKey: run.boardKey,
+    ranked: run.ranked,
+    durationMs: run.durationMs ?? null,
+    completedAt: run.completedAt,
   }
 }
 
@@ -42,7 +37,10 @@ export const current = query({
       return null
     }
 
-    const profile = await getProfileByTokenIdentifier(ctx, identity.tokenIdentifier)
+    const profile = await getProfileByTokenIdentifier(
+      ctx,
+      identity.tokenIdentifier
+    )
     return profile ? toPublicProfile(profile) : null
   },
 })
@@ -60,7 +58,10 @@ export const sessionStatus = query({
       }
     }
 
-    const profile = await getProfileByTokenIdentifier(ctx, identity.tokenIdentifier)
+    const profile = await getProfileByTokenIdentifier(
+      ctx,
+      identity.tokenIdentifier
+    )
 
     return {
       convexAuthenticated: true,
@@ -95,9 +96,11 @@ export const profilePage = query({
     const isCurrentUser =
       currentIdentity?.tokenIdentifier === profile.tokenIdentifier
 
-    const participantRows = await ctx.db
-      .query("matchParticipants")
-      .withIndex("by_profileId", (query) => query.eq("profileId", profile._id))
+    const storedRuns = await ctx.db
+      .query("completedRuns")
+      .withIndex("by_profileId_completedAt", (query) =>
+        query.eq("profileId", profile._id)
+      )
       .order("desc")
       .take(64)
 
@@ -106,18 +109,16 @@ export const profilePage = query({
     let wins = 0
     let personalBestMs: number | null = null
 
-    for (const participant of participantRows) {
-      const match = await ctx.db.get(participant.matchId)
-
-      if (!match || match.gameKey !== "minesweeper" || match.modeKey !== "solo") {
+    for (const storedRun of storedRuns) {
+      if (storedRun.gameKey !== "minesweeper" || storedRun.modeKey !== "solo") {
         continue
       }
 
-      const run = summarizeRun(match, participant)
+      const run = summarizeRun(storedRun)
       runs.push(run)
       boardCounts.set(run.boardKey, (boardCounts.get(run.boardKey) ?? 0) + 1)
 
-      if (match.outcome === "won") {
+      if (run.outcome === "won") {
         wins += 1
 
         if (
@@ -130,7 +131,9 @@ export const profilePage = query({
     }
 
     const favoriteBoard =
-      [...boardCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null
+      [...boardCounts.entries()].sort(
+        (left, right) => right[1] - left[1]
+      )[0]?.[0] ?? null
 
     return {
       profile: toPublicProfile(profile),
@@ -170,7 +173,9 @@ export const search = query({
 
     const candidates = await ctx.db
       .query("profiles")
-      .withIndex("by_usernameLower", (query) => query.gte("usernameLower", rawQuery))
+      .withIndex("by_usernameLower", (query) =>
+        query.gte("usernameLower", rawQuery)
+      )
       .take(10)
 
     return candidates
@@ -186,7 +191,10 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx)
-    const existingProfile = await getProfileByTokenIdentifier(ctx, identity.tokenIdentifier)
+    const existingProfile = await getProfileByTokenIdentifier(
+      ctx,
+      identity.tokenIdentifier
+    )
 
     if (existingProfile) {
       return toPublicProfile(existingProfile)
@@ -223,8 +231,7 @@ export const create = mutation({
       tag,
       usernameTag,
       usernameTagLower,
-      avatarUrl:
-        typeof identity.pictureUrl === "string" ? identity.pictureUrl : undefined,
+      avatarSeed: buildProfileAvatarSeed(usernameTagLower),
       status: "available",
       presence: "online",
       createdAt: now,
@@ -248,10 +255,61 @@ export const create = mutation({
   },
 })
 
+export const updateUsername = mutation({
+  args: {
+    username: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { profile } = await requireProfile(ctx)
+    const username = normalizeUsername(args.username)
+    assertValidUsername(username)
+
+    if (username === profile.username) {
+      return toPublicProfile(profile)
+    }
+
+    const usernameLower = username.toLowerCase()
+    const usernameTag = toUsernameTag(username, profile.tag)
+    const usernameTagLower = usernameTag.toLowerCase()
+    const collision = await ctx.db
+      .query("profiles")
+      .withIndex("by_usernameTagLower", (query) =>
+        query.eq("usernameTagLower", usernameTagLower)
+      )
+      .unique()
+
+    if (collision && collision._id !== profile._id) {
+      throw new Error("That username tag is already taken.")
+    }
+
+    await ctx.db.patch(profile._id, {
+      username,
+      usernameLower,
+      usernameTag,
+      usernameTagLower,
+      avatarSeed: buildProfileAvatarSeed(usernameTagLower),
+      updatedAt: Date.now(),
+    })
+
+    const updatedProfile = await ctx.db.get(profile._id)
+
+    if (!updatedProfile) {
+      throw new Error("Profile update failed.")
+    }
+
+    return toPublicProfile(updatedProfile)
+  },
+})
+
 export const touchPresence = mutation({
   args: {
     presence: v.optional(
-      v.union(v.literal("online"), v.literal("idle"), v.literal("away"), v.literal("offline"))
+      v.union(
+        v.literal("online"),
+        v.literal("idle"),
+        v.literal("away"),
+        v.literal("offline")
+      )
     ),
     status: v.optional(
       v.union(
@@ -268,11 +326,13 @@ export const touchPresence = mutation({
     const nextPresence = args.presence ?? profile.presence
     const nextStatus = args.status ?? profile.status
 
-    await ctx.db.patch(profile._id, {
-      presence: nextPresence,
-      status: nextStatus,
-      updatedAt: now,
-    })
+    if (nextPresence !== profile.presence || nextStatus !== profile.status) {
+      await ctx.db.patch(profile._id, {
+        presence: nextPresence,
+        status: nextStatus,
+        updatedAt: now,
+      })
+    }
 
     const presenceRow = await ctx.db
       .query("presence")

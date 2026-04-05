@@ -4,17 +4,20 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 0.0.0.0",
     "convex:env:sync": "convex env set --from-file .env.convex.local",
     "convex:dev": "convex dev",
     "build": "tsc -b && vite build",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.3",
+    "@dicebear/core": "9.4.2",
+    "@dicebear/pixel-art": "9.4.2",
     "@phosphor-icons/react": "^2.1.10",
     "@workspace/game-contracts": "workspace:*",
     "@workspace/game-core": "workspace:*",
@@ -27,6 +30,8 @@
     "react-router-dom": "^7.14.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
     "@eslint/js": "^9.39.2",
     "@tailwindcss/vite": "^4.1.18",
     "@types/node": "^25.1.0",
@@ -37,8 +42,10 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^17.2.0",
+    "jsdom": "^27.0.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^3.2.4"
   }
 }

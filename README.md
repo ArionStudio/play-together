@@ -96,7 +96,7 @@ Expected shape:
 CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
 ```
 
-This repo reads that value in [auth.config.ts](/C:/Users/Furgil/dev/play-together/apps/web/convex/auth.config.ts#L1) and registers Clerk with `applicationID: "convex"`, so the Clerk side must issue the `convex` JWT template expected by `ConvexProviderWithClerk`.
+This repo reads that value in `apps/web/convex/auth.config.ts` and registers Clerk with `applicationID: "convex"`, so the Clerk side must issue the `convex` JWT template expected by `ConvexProviderWithClerk`.
 
 Client Trust note:
 
@@ -153,11 +153,11 @@ CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
 
 ## Deploy To Vercel
 
-For production hosting on Vercel, follow [DEPLOY_VERCEL.md](/C:/Users/Furgil/dev/play-together/DEPLOY_VERCEL.md).
+For production hosting on Vercel, follow `DEPLOY_VERCEL.md`.
 
-The repo already includes [vercel.json](/C:/Users/Furgil/dev/play-together/vercel.json) so Vercel can:
+The repo already includes `apps/web/vercel.json` for SPA rewrites, and the Vercel project should follow the official Convex setup from `DEPLOY_VERCEL.md` so Vercel can:
 
-- build from the monorepo root
+- build from `apps/web`
 - deploy Convex during the build
 - inject `VITE_CONVEX_URL` automatically
 - rewrite SPA routes to `index.html`

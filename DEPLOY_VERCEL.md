@@ -1,13 +1,8 @@
 # Deploy To Vercel
 
-This repo is prepared for a repo-root Vercel deployment.
+This repo is prepared for the official Convex + Vercel setup with the Vercel project rooted at `apps/web`.
 
-The checked-in [vercel.json](/C:/Users/Furgil/dev/play-together/vercel.json) does four things:
-
-- installs from the monorepo root with `pnpm`
-- deploys Convex during the Vercel build
-- injects `VITE_CONVEX_URL` into the Vite build automatically
-- rewrites every route to `index.html` so React Router browser routes work on refresh
+The checked-in `apps/web/vercel.json` only handles SPA rewrites. The Convex deployment step follows the official Convex docs through the Vercel dashboard Build Command override.
 
 ## What Runs Where
 
@@ -33,7 +28,7 @@ Create a Clerk application and copy:
 
 If the Clerk application was created before November 14, 2025, open `Updates` in the Clerk Dashboard and enable `Client Trust` before shipping password sign-ins on production.
 
-You can use the examples in [apps/web/.env.example](/C:/Users/Furgil/dev/play-together/apps/web/.env.example) and [apps/web/.env.convex.example](/C:/Users/Furgil/dev/play-together/apps/web/.env.convex.example) as the source of truth for variable names.
+You can use `apps/web/.env.example` and `apps/web/.env.convex.example` as the source of truth for variable names.
 
 ### 2. Prepare Convex production
 
@@ -73,7 +68,18 @@ This key is used by Vercel so every Git push deploys both the frontend and the C
 
 Create a new Vercel project and import this repository.
 
-Keep the project rooted at the repo root. Do not change the Root Directory to `apps/web`, because this app depends on workspace packages from `packages/*`.
+Set:
+
+- `Root Directory`: `apps/web`
+- `Include files outside the root directory in the Build Step`: enabled
+- `Framework Preset`: `Vite`
+
+In `Build & Output Settings`, override:
+
+- `Build Command`: `npx convex deploy --cmd "pnpm build"`
+- `Output Directory`: `dist`
+
+This app still depends on workspace packages from `packages/*`, so the "include files outside root" setting must stay enabled.
 
 ### 2. Environment variables in Vercel
 
@@ -86,7 +92,7 @@ Notes:
 
 - `VITE_CLERK_PUBLISHABLE_KEY` comes from Clerk
 - `CONVEX_DEPLOY_KEY` comes from the Convex production deployment settings
-- you do **not** need to set `VITE_CONVEX_URL` manually when using this repo's [vercel.json](/C:/Users/Furgil/dev/play-together/vercel.json), because `convex deploy` injects it during the build
+- you do **not** need to set `VITE_CONVEX_URL` manually, because `convex deploy` injects it during the build
 
 ### 3. Deploy
 

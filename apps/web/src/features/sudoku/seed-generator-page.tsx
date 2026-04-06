@@ -401,7 +401,7 @@ function ConnectedSeedGeneratorPage() {
           description="This page saves valid seeds into the shared catalog, so you need an authenticated profile before generation can start."
           action={
             <SignInButton mode="modal">
-              <Button type="button">Sign In With Google</Button>
+              <Button type="button">Sign In</Button>
             </SignInButton>
           }
         />

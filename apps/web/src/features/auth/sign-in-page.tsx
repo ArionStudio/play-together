@@ -16,11 +16,11 @@ function EnabledSignIn() {
         <Page className="mx-auto max-w-xl">
           <PageHeader
             title="Sign in"
-            description="Continue with Google to open your profile."
+            description="Open Clerk sign-in to continue to your profile."
           />
           <Surface className="p-6">
             <SignInButton mode="modal">
-              <Button size="lg">Continue with Google</Button>
+              <Button size="lg">Continue to Sign In</Button>
             </SignInButton>
           </Surface>
         </Page>

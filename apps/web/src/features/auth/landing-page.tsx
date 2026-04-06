@@ -26,7 +26,7 @@ function ServicesCallToAction() {
       <SignedOut>
         <SignInButton mode="modal">
           <Button size="lg">
-            Sign In With Google
+            Sign In
             <ArrowRight className="size-4" />
           </Button>
         </SignInButton>

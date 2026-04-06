@@ -85,7 +85,7 @@ function EnabledAuthActions({ stacked = false }: { stacked?: boolean }) {
       <SignedOut>
         <SignInButton mode="modal">
           <Button className={stacked ? "w-full" : undefined} size="sm">
-            Sign In With Google
+            Sign In
           </Button>
         </SignInButton>
       </SignedOut>

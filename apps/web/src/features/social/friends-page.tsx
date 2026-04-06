@@ -119,7 +119,7 @@ function ConnectedFriendsPage() {
         />
         <Surface className="p-6">
           <SignInButton mode="modal">
-            <Button>Sign In With Google</Button>
+            <Button>Sign In</Button>
           </SignInButton>
         </Surface>
       </Page>

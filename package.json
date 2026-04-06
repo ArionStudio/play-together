@@ -5,6 +5,7 @@
   "scripts": {
     "build": "turbo build",
     "convex:dev": "pnpm --filter web convex:dev",
+    "convex:deploy": "pnpm --filter web convex:deploy",
     "convex:env:sync": "pnpm --filter web convex:env:sync",
     "dev": "turbo run dev convex:dev --filter=web",
     "lint": "turbo lint",

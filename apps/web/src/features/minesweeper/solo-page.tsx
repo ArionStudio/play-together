@@ -952,8 +952,7 @@ function LocalSoloPage({ allowCustom }: { allowCustom: boolean }) {
 }
 
 // Kept for the server-authoritative flow, even though the current export uses local solo mode.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
+export function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
   const navigate = useNavigate()
   const params = useParams()
   const routeMatchId = params.matchId ?? null
@@ -1072,7 +1071,7 @@ function ConnectedSoloPage({ allowCustom }: { allowCustom: boolean }) {
           </p>
           <div className="flex gap-3">
             <SignInButton mode="modal">
-              <Button>Sign In With Google</Button>
+              <Button>Sign In</Button>
             </SignInButton>
             <Button asChild variant="outline">
               <Link to="/leaderboards">View leaderboards</Link>

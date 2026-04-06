@@ -215,7 +215,7 @@ function getCellColor(
 function MultiplayerCompletionPanel(args: {
   difficultyLabel: string
   modeLabel: string
-  outcome: "lost" | "won"
+  outcome: "abandoned" | "lost" | "won"
   participantRows: Array<{
     primary: string
     secondary: string
@@ -240,7 +240,14 @@ function MultiplayerCompletionPanel(args: {
       </div>
       <dl className="mt-5 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-2">
         {[
-          ["Result", args.outcome === "won" ? "Solved" : "Finished"],
+          [
+            "Result",
+            args.outcome === "won"
+              ? "Solved"
+              : args.outcome === "abandoned"
+                ? "Abandoned"
+                : "Finished",
+          ],
           ["Time", args.timeLabel],
           ["Difficulty", args.difficultyLabel],
           ["Mode", args.modeLabel],
@@ -900,7 +907,7 @@ export function SudokuMatchPage() {
         />
         <Surface className="p-6">
           <SignInButton mode="modal">
-            <Button>Sign In With Google</Button>
+            <Button>Sign In</Button>
           </SignInButton>
         </Surface>
       </Page>

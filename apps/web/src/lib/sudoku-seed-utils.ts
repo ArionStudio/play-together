@@ -30,7 +30,7 @@ export function createSudokuCatalogSeed(cryptoOverride?: CryptoLike) {
     throw new Error("This browser does not support the required Web Crypto APIs.")
   }
 
-  return crypto.randomUUID()
+  return crypto!.randomUUID()
 }
 
 export function bytesToHex(bytes: ArrayBuffer | Uint8Array) {
@@ -54,7 +54,7 @@ export async function computeSudokuPuzzleHash(
     givens: args.givens,
   })
   const encoded = new TextEncoder().encode(stablePayload)
-  const digest = await crypto.subtle.digest("SHA-256", encoded)
+  const digest = await crypto!.subtle.digest("SHA-256", encoded)
 
   return bytesToHex(digest)
 }

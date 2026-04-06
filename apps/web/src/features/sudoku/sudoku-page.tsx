@@ -116,9 +116,10 @@ function clearDigitFromRelatedNotes(args: {
   }
 
   const related = new Set(getRelatedIndices(args.index))
+  const digit = args.value as (typeof DIGIT_OPTIONS)[number]
   let changed = false
   const nextCells = args.game.cells.map((cell, cellIndex) => {
-    if (!related.has(cellIndex) || !cell.notes.includes(args.value)) {
+    if (!related.has(cellIndex) || !cell.notes.includes(digit)) {
       return cell
     }
 
@@ -126,7 +127,7 @@ function clearDigitFromRelatedNotes(args: {
 
     return {
       ...cell,
-      notes: cell.notes.filter((note) => note !== args.value),
+      notes: cell.notes.filter((note) => note !== digit),
     }
   })
 

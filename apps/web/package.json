@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "convex:env:sync": "convex env set --from-file .env.convex.local",
     "convex:dev": "convex dev",
+    "convex:deploy": "convex deploy",
     "build": "tsc -b && vite build",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",

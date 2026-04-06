@@ -127,7 +127,7 @@ function formatCountdown(remainingMs: number) {
 function MatchCompletionPanel(args: {
   boardKey: string
   modeLabel: string
-  outcome: "lost" | "won"
+  outcome: "abandoned" | "lost" | "won"
   participantRows: Array<{
     primary: string
     secondary: string
@@ -152,7 +152,14 @@ function MatchCompletionPanel(args: {
       </div>
       <dl className="mt-5 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-2">
         {[
-          ["Result", args.outcome === "won" ? "Win" : "Loss"],
+          [
+            "Result",
+            args.outcome === "won"
+              ? "Win"
+              : args.outcome === "abandoned"
+                ? "Abandoned"
+                : "Loss",
+          ],
           ["Time", args.timeLabel],
           ["Board", args.boardKey],
           ["Mode", args.modeLabel],
@@ -212,7 +219,7 @@ export function MinesweeperMatchPage() {
         />
         <Surface className="p-6">
           <SignInButton mode="modal">
-            <Button>Sign In With Google</Button>
+            <Button>Sign In</Button>
           </SignInButton>
         </Surface>
       </Page>

@@ -46,6 +46,7 @@ Where to get it:
 
 - Open the Clerk Dashboard
 - Select your application
+- If the application was created before November 14, 2025, open `Updates` and enable `Client Trust`
 - Go to `API Keys`
 - In `Quick Copy`, copy the `Publishable Key`
 
@@ -97,6 +98,12 @@ CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
 
 This repo reads that value in [auth.config.ts](/C:/Users/Furgil/dev/play-together/apps/web/convex/auth.config.ts#L1) and registers Clerk with `applicationID: "convex"`, so the Clerk side must issue the `convex` JWT template expected by `ConvexProviderWithClerk`.
 
+Client Trust note:
+
+- this app uses Clerk's hosted modal sign-in via `SignInButton`, not a custom password sign-in flow
+- when Client Trust triggers on a new device for a password sign-in, Clerk handles the extra verification step in its own UI
+- there is no repo-specific `needs_client_trust` handler to add unless you later replace the hosted flow with a custom Clerk API sign-in implementation
+
 ### 4. Configure the Convex deployment first
 
 Run this from the repo root:
@@ -143,3 +150,14 @@ VITE_CONVEX_URL=https://your-deployment.convex.cloud
 # apps/web/.env.convex.local
 CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
 ```
+
+## Deploy To Vercel
+
+For production hosting on Vercel, follow [DEPLOY_VERCEL.md](/C:/Users/Furgil/dev/play-together/DEPLOY_VERCEL.md).
+
+The repo already includes [vercel.json](/C:/Users/Furgil/dev/play-together/vercel.json) so Vercel can:
+
+- build from the monorepo root
+- deploy Convex during the build
+- inject `VITE_CONVEX_URL` automatically
+- rewrite SPA routes to `index.html`

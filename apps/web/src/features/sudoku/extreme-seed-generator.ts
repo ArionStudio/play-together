@@ -12,8 +12,8 @@ type SaveExtremeSeedInput = {
 }
 
 type SaveExtremeSeedResult = {
-  recordId: string
-  status: "duplicate" | "saved"
+  recordId: string | null
+  status: "duplicate" | "ignored" | "saved"
 }
 
 export type ExtremeSeedAttemptResult =
@@ -77,6 +77,15 @@ export async function runExtremeSeedCatalogAttempt(args: {
   if (saveResult.status === "duplicate") {
     return {
       kind: "duplicate" as const,
+      puzzleHash,
+      seed,
+    }
+  }
+
+  if (saveResult.status === "ignored" || !saveResult.recordId) {
+    return {
+      actualDifficulty,
+      kind: "invalid" as const,
       puzzleHash,
       seed,
     }

@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useState } from "react"
+import { useEffect, useEffectEvent, useState } from "react"
 import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import { SignInButton, useAuth } from "@clerk/clerk-react"
 import {
@@ -14,14 +14,21 @@ import { Link, useParams } from "react-router-dom"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
-import {
-  getConflictingIndices,
-  getRelatedIndices,
-  sudokuDifficultyLabels,
-} from "@workspace/sudoku-engine"
+import { sudokuDifficultyLabels } from "@workspace/sudoku-engine"
 
 import { api } from "@convex/api"
+import { ProfileAvatar } from "@/components/profile-avatar.tsx"
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
+import {
+  FocusKindIcon,
+  SudokuBoard,
+  buildFocusForCell,
+  toggleFocusMark,
+  type Decoration,
+  type FocusKind,
+  type FocusMark,
+  type NoteMark,
+} from "@/features/sudoku/board.tsx"
 import { resolveNotesDigitInput } from "@/features/sudoku/input-mode.ts"
 import {
   readAppPreferences,
@@ -56,27 +63,6 @@ const EMPTY_SUDOKU_NOTE_MARKS = Array.from({ length: 81 }, () => [] as NoteMark[
 const EMPTY_SUDOKU_VALUE_OWNERS = Array.from({ length: 81 }, () => null as string | null)
 
 type EntryMode = "fill" | "notes" | "focus"
-type FocusKind = "cell" | "row" | "column" | "box" | "digit"
-type FocusMark = {
-  kind: FocusKind
-  index: number
-}
-
-type Decoration = {
-  color: (typeof PLAYER_COLORS)[number]
-  focuses: FocusMark[]
-  profileId: string
-  selectedIndex: number | null
-}
-
-type NoteMark = {
-  digit: number
-  profileId: string
-}
-
-function formatCountdown(remainingMs: number) {
-  return Math.max(1, Math.ceil(remainingMs / 1000))
-}
 
 function formatClockTimer(durationMs: number) {
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1000))
@@ -98,7 +84,7 @@ function formatMatchTimer(args: {
   nowMs: number
 }) {
   if (!args.hasStarted) {
-    return formatClockTimer(Math.max(0, args.countdownEndsAt - args.nowMs))
+    return formatClockTimer(0)
   }
 
   if (typeof args.durationMs === "number") {
@@ -108,108 +94,24 @@ function formatMatchTimer(args: {
   return formatClockTimer(Math.max(0, args.nowMs - args.countdownEndsAt))
 }
 
-function getFocusKey(focus: FocusMark) {
-  return `${focus.kind}:${focus.index}`
-}
-
-function FocusKindIcon({ kind }: { kind: FocusKind }) {
-  if (kind === "cell") {
-    return (
-      <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
-        <rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="6" y="6" width="4" height="4" rx="0.75" fill="currentColor" />
-      </svg>
-    )
+function participantStartLabel(status: string) {
+  if (status === "pending") {
+    return "Waiting to start"
   }
 
-  if (kind === "row") {
-    return (
-      <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
-        <rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="3.5" y="6.25" width="9" height="3.5" rx="0.75" fill="currentColor" />
-      </svg>
-    )
+  if (status === "active") {
+    return "Ready"
   }
 
-  if (kind === "column") {
-    return (
-      <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
-        <rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="6.25" y="3.5" width="3.5" height="9" rx="0.75" fill="currentColor" />
-      </svg>
-    )
+  if (status === "finished") {
+    return "Finished"
   }
 
-  if (kind === "box") {
-    return (
-      <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
-        <rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="4.5" y="4.5" width="7" height="7" rx="0.75" fill="currentColor" />
-      </svg>
-    )
+  if (status === "eliminated") {
+    return "Out"
   }
 
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
-      <circle cx="8" cy="8" r="5.25" stroke="currentColor" strokeWidth="1.5" />
-      <text x="8" y="10.1" textAnchor="middle" fontSize="7.5" fontWeight="700" fill="currentColor">
-        1
-      </text>
-    </svg>
-  )
-}
-
-function buildFocusForCell(index: number, focusKind: Exclude<FocusKind, "digit">): FocusMark {
-  switch (focusKind) {
-    case "cell":
-      return { kind: "cell", index }
-    case "row":
-      return { kind: "row", index: Math.floor(index / 9) }
-    case "column":
-      return { kind: "column", index: index % 9 }
-    case "box":
-      return {
-        kind: "box",
-        index: Math.floor(index / 27) * 3 + Math.floor((index % 9) / 3),
-      }
-  }
-}
-
-function toggleFocusMark(focuses: FocusMark[], nextFocus: FocusMark) {
-  const key = getFocusKey(nextFocus)
-
-  return focuses.some((focus) => getFocusKey(focus) === key)
-    ? focuses.filter((focus) => getFocusKey(focus) !== key)
-    : [...focuses, nextFocus]
-}
-
-function matchesFocus(args: {
-  focus: FocusMark
-  index: number
-  values: number[]
-}) {
-  const row = Math.floor(args.index / 9)
-  const column = args.index % 9
-
-  switch (args.focus.kind) {
-    case "cell":
-      return args.focus.index === args.index
-    case "row":
-      return args.focus.index === row
-    case "column":
-      return args.focus.index === column
-    case "box":
-      return args.focus.index === Math.floor(row / 3) * 3 + Math.floor(column / 3)
-    case "digit":
-      return args.values[args.index] === args.focus.index
-  }
-}
-
-function getCellColor(
-  ownerKey: string | undefined,
-  paletteByProfile: Map<string, (typeof PLAYER_COLORS)[number]>
-) {
-  return ownerKey ? paletteByProfile.get(ownerKey)?.text : undefined
+  return status
 }
 
 function MultiplayerCompletionPanel(args: {
@@ -271,128 +173,6 @@ function MultiplayerCompletionPanel(args: {
   )
 }
 
-function SudokuBoard({
-  className,
-  decorations,
-  givens,
-  noteMarks,
-  notes,
-  onCellClick,
-  selectedIndex,
-  valueOwners,
-  values,
-}: {
-  className?: string
-  decorations: Decoration[]
-  givens: number[]
-  noteMarks?: NoteMark[][]
-  notes?: number[][]
-  onCellClick: (index: number) => void
-  selectedIndex: number | null
-  valueOwners?: Array<string | null>
-  values: number[]
-}) {
-  const conflictSet = useMemo(() => new Set(getConflictingIndices(values)), [values])
-  const relatedSet = useMemo(
-    () => new Set(selectedIndex === null ? [] : getRelatedIndices(selectedIndex)),
-    [selectedIndex]
-  )
-  const paletteByProfile = useMemo(
-    () => new Map(decorations.map((decoration) => [decoration.profileId, decoration.color])),
-    [decorations]
-  )
-
-  return (
-    <div className={cn("mx-auto w-full max-w-[min(100vw-1.5rem,24rem)]", className)}>
-      <div className="grid grid-cols-9 border-2 border-foreground/90 bg-border/50">
-        {values.map((value, index) => {
-          const row = Math.floor(index / 9)
-          const column = index % 9
-          const fixed = givens[index] !== 0
-          const isSelected = index === selectedIndex
-          const isRelated = relatedSet.has(index)
-          const matchingDecorations = decorations.filter((decoration) =>
-            decoration.focuses.some((focus) =>
-              matchesFocus({
-                focus,
-                index,
-                values,
-              })
-            )
-          )
-          const selectionDecorations = decorations.filter(
-            (decoration) => decoration.selectedIndex === index
-          )
-          const ownerKey =
-            valueOwners?.[index] !== null && valueOwners?.[index] !== undefined
-              ? valueOwners[index] ?? undefined
-              : undefined
-          const valueColor = getCellColor(ownerKey, paletteByProfile)
-
-          return (
-            <button
-              key={index}
-              type="button"
-              onClick={() => onCellClick(index)}
-              className={cn(
-                "relative flex aspect-square items-center justify-center overflow-hidden border border-border text-sm transition-colors sm:text-base",
-                row === 2 || row === 5 ? "border-b-2 border-b-foreground/90" : "",
-                column === 2 || column === 5 ? "border-r-2 border-r-foreground/90" : "",
-                fixed ? "bg-muted/35 font-semibold text-foreground" : "bg-background text-foreground",
-                isRelated ? "bg-muted/60" : "",
-                isSelected ? "ring-2 ring-inset ring-primary" : "",
-                conflictSet.has(index) ? "text-destructive" : ""
-              )}
-            >
-              {matchingDecorations.map((decoration, decorationIndex) => (
-                <span
-                  key={`${decoration.profileId}-${decorationIndex}-${index}`}
-                  className="pointer-events-none absolute inset-0"
-                  style={{ backgroundColor: decoration.color.tint }}
-                />
-              ))}
-              {selectionDecorations.map((decoration) => (
-                <span
-                  key={`${decoration.profileId}-selection-${index}`}
-                  className="pointer-events-none absolute inset-[2px] rounded-[2px] border-2"
-                  style={{ borderColor: decoration.color.ring }}
-                />
-              ))}
-              {value !== 0 ? (
-                <span
-                  className="relative z-10"
-                  style={{ color: fixed ? undefined : valueColor }}
-                >
-                  {value}
-                </span>
-              ) : (
-                <span className="relative z-10 grid h-full w-full grid-cols-3 place-items-center px-[1px] py-[2px] font-mono text-[10px] leading-none text-muted-foreground sm:text-xs">
-                  {DIGIT_OPTIONS.map((digit) => {
-                    const markedNote =
-                      noteMarks?.[index]?.find((note) => note.digit === digit) ?? null
-                    const hasNote = markedNote !== null || (notes?.[index]?.includes(digit) ?? false)
-                    const noteColor = getCellColor(markedNote?.profileId, paletteByProfile)
-
-                    return (
-                      <span
-                        key={digit}
-                        className={hasNote ? "opacity-100" : "opacity-0"}
-                        style={{ color: noteColor }}
-                      >
-                        {digit}
-                      </span>
-                    )
-                  })}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 export function SudokuMatchPage() {
   const params = useParams()
   const matchId = params.matchId ?? null
@@ -409,6 +189,7 @@ export function SudokuMatchPage() {
   const [pendingMatchState, setPendingMatchState] = useState<typeof state | null>(null)
   const updateCell = useMutation(api.multiplayer.updateSudokuCell)
   const undoMove = useMutation(api.multiplayer.undoSudokuMove)
+  const confirmStart = useMutation(api.multiplayer.confirmSudokuStart)
   const updatePresence = useMutation(api.multiplayer.updateSudokuPresence)
   const [mode, setMode] = useState<EntryMode>("fill")
   const [focusKind, setFocusKind] = useState<FocusKind>("cell")
@@ -418,6 +199,7 @@ export function SudokuMatchPage() {
   const [mobileBoard, setMobileBoard] = useState(0)
   const [localFocuses, setLocalFocuses] = useState<FocusMark[]>([])
   const [actionError, setActionError] = useState<string | null>(null)
+  const [startPending, setStartPending] = useState(false)
   const [minimalView, setMinimalView] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [fillInput, setFillInput] = useState<SudokuInputPreference>(
@@ -441,7 +223,12 @@ export function SudokuMatchPage() {
     color: (typeof PLAYER_COLORS)[number]
     focuses?: FocusMark[]
     isSelf: boolean
-    profile: { _id?: string; usernameTag: string }
+    profile: {
+      _id?: string
+      avatarSeed?: string
+      avatarUrl?: string
+      usernameTag: string
+    }
     selectedIndex: number | null
     status: string
   }>
@@ -449,7 +236,12 @@ export function SudokuMatchPage() {
     board: { notes: number[][]; values: number[] }
     color: (typeof PLAYER_COLORS)[number]
     isSelf: boolean
-    profile: { _id?: string; usernameTag: string }
+    profile: {
+      _id?: string
+      avatarSeed?: string
+      avatarUrl?: string
+      usernameTag: string
+    }
     status: string
   }>
   const coopSelfParticipant =
@@ -827,6 +619,10 @@ export function SudokuMatchPage() {
         return
       }
 
+      if (!matchState.hasStarted || matchState.outcome) {
+        return
+      }
+
       if (/^[1-9]$/.test(event.key)) {
         event.preventDefault()
         handleKeyboardDigit(Number(event.key))
@@ -958,14 +754,16 @@ export function SudokuMatchPage() {
     hasStarted: matchState.hasStarted,
     nowMs,
   })
+  const waitingForPlayers = !matchState.hasStarted && !matchState.outcome
   const matchStatusLabel = !matchState.hasStarted
-    ? `Starts ${timerLabel}`
+    ? "Waiting to start"
     : matchState.outcome
       ? matchState.outcome === "won"
         ? "Solved"
         : "Finished"
       : "Live"
-  const boardClassName = "max-w-[min(100vw-1rem,50rem)]"
+  const boardClassName = minimalView ? "w-full max-h-full max-w-full" : undefined
+  const controlsDisabled = !matchState.hasStarted || Boolean(matchState.outcome)
   const activeOptionSectionClass =
     mode === "focus"
       ? "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2"
@@ -1030,7 +828,7 @@ export function SudokuMatchPage() {
             </button>
           </div>
 
-          {!minimalView && (matchState.outcome || !matchState.hasStarted) ? (
+          {!minimalView && (matchState.outcome || waitingForPlayers) ? (
             <div className="min-h-8">
               {matchState.outcome ? (
               <MultiplayerCompletionPanel
@@ -1041,10 +839,62 @@ export function SudokuMatchPage() {
                 timeLabel={timerLabel}
               />
               ) : (
-              <div className="border border-border px-3 py-2 text-sm">
-                <p className="font-medium">
-                  Starting in {formatCountdown(matchState.remainingCountdownMs)}
-                </p>
+              <div className="space-y-4 border border-border px-3 py-3 text-sm">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="font-medium">Board is ready.</p>
+                    <p className="mt-1 text-muted-foreground">
+                      Each player needs to press Start. The timer begins only when both
+                      players are ready on this screen.
+                    </p>
+                  </div>
+                  <Button
+                    disabled={startPending || selfParticipant?.status !== "pending"}
+                    onClick={async () => {
+                      if (!selfParticipant || selfParticipant.status !== "pending") {
+                        return
+                      }
+
+                      setStartPending(true)
+
+                      try {
+                        const nextState = await confirmStart({ matchId: matchState.matchId })
+                        setPendingMatchState(nextState)
+                      } finally {
+                        setStartPending(false)
+                      }
+                    }}
+                  >
+                    {selfParticipant?.status === "pending"
+                      ? startPending
+                        ? "Starting..."
+                        : "Start match"
+                      : "Waiting for other player"}
+                  </Button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {participantsWithColors.map((participant) => (
+                    <div
+                      key={participant.profile.usernameTag}
+                      className="flex items-center gap-3 rounded-lg border border-border px-3 py-3"
+                    >
+                      <ProfileAvatar
+                        avatarSeed={participant.profile.avatarSeed}
+                        avatarUrl={participant.profile.avatarUrl}
+                        className="size-10 rounded-md"
+                        usernameTag={participant.profile.usernameTag}
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">
+                          {participant.isSelf ? "You" : participant.profile.usernameTag}
+                        </p>
+                        <p className="text-muted-foreground">
+                          {participantStartLabel(participant.status)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
               )}
             </div>
@@ -1052,9 +902,11 @@ export function SudokuMatchPage() {
 
           <div
             className={cn(
-              minimalView
-                ? "min-h-0 flex-1 overflow-auto pt-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-                : ""
+              minimalView && isCoop
+                ? "flex min-h-0 flex-1 items-center justify-center overflow-hidden pt-3"
+                : minimalView
+                  ? "min-h-0 flex-1 overflow-auto pt-3 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+                  : ""
             )}
           >
             {isCoop ? (
@@ -1073,7 +925,7 @@ export function SudokuMatchPage() {
                 values={coopBoardValues}
               />
             ) : (
-              <div className="space-y-3">
+              <div className={cn("space-y-3", minimalView && "flex min-h-0 flex-1 flex-col")}>
                 <div className="flex justify-center gap-2 overflow-auto pb-1 md:hidden">
                   {participantsWithColors.map((participant, index) => (
                     <Button
@@ -1081,14 +933,20 @@ export function SudokuMatchPage() {
                       size="sm"
                       type="button"
                       variant={mobileBoard === index ? "default" : "outline"}
-                      className="h-7 px-2 text-xs"
+                      className="h-8 gap-2 px-2 text-xs"
                       onClick={() => setMobileBoard(index)}
                     >
+                      <ProfileAvatar
+                        avatarSeed={participant.profile.avatarSeed}
+                        avatarUrl={participant.profile.avatarUrl}
+                        className="size-5 rounded-sm"
+                        usernameTag={participant.profile.usernameTag}
+                      />
                       {participant.isSelf ? "You" : participant.profile.usernameTag}
                     </Button>
                   ))}
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className={cn("grid gap-3 md:grid-cols-2", minimalView && "min-h-0 flex-1")}>
                   {raceParticipants.map((participant, index) => {
                     const selfBoardDecorations =
                       participant.isSelf && localDigitDecoration ? [localDigitDecoration] : []
@@ -1098,16 +956,27 @@ export function SudokuMatchPage() {
                         key={participant.profile.usernameTag}
                         className={cn(
                           "space-y-2",
+                          minimalView && "flex min-h-0 flex-col items-center justify-center",
                           index !== mobileBoard ? "hidden md:block" : ""
                         )}
                       >
                         {!minimalView ? (
                           <div className="flex items-center justify-between gap-3 text-sm">
-                            <div>
-                              <p className="font-medium">
+                            <div className="flex min-w-0 items-center gap-3">
+                              <ProfileAvatar
+                                avatarSeed={participant.profile.avatarSeed}
+                                avatarUrl={participant.profile.avatarUrl}
+                                className="size-9 rounded-md"
+                                usernameTag={participant.profile.usernameTag}
+                              />
+                              <div className="min-w-0">
+                                <p className="truncate font-medium">
                                 {participant.isSelf ? "You" : participant.profile.usernameTag}
-                              </p>
-                              <p className="text-muted-foreground">{participant.status}</p>
+                                </p>
+                                <p className="text-muted-foreground">
+                                  {participantStartLabel(participant.status)}
+                                </p>
+                              </div>
                             </div>
                           </div>
                         ) : null}
@@ -1150,6 +1019,7 @@ export function SudokuMatchPage() {
                     return (
                       <Button
                         key={option.value}
+                        disabled={controlsDisabled}
                         size="icon"
                         type="button"
                         className="h-10 w-10"
@@ -1165,6 +1035,7 @@ export function SudokuMatchPage() {
               </div>
               <div className="flex rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
                 <Button
+                  disabled={controlsDisabled}
                   size="icon"
                   type="button"
                   className="h-10 w-10"
@@ -1181,7 +1052,7 @@ export function SudokuMatchPage() {
                   size="icon"
                   type="button"
                   variant="outline"
-                  disabled={!matchState.canUndo}
+                  disabled={controlsDisabled || !matchState.canUndo}
                   className="h-10 w-10"
                   onClick={() => {
                     void handleUndo()
@@ -1195,7 +1066,7 @@ export function SudokuMatchPage() {
                   size="icon"
                   type="button"
                   variant="outline"
-                  disabled={currentSelectedIndex === null}
+                  disabled={controlsDisabled || currentSelectedIndex === null}
                   className="h-10 w-10"
                   onClick={() => {
                     if (currentSelectedIndex === null) {
@@ -1218,7 +1089,10 @@ export function SudokuMatchPage() {
                   key={digit}
                   type="button"
                   className="h-10 w-10 rounded-md px-0 text-base"
-                  disabled={requiresSelectedCellForDigitInput && currentSelectedIndex === null}
+                  disabled={
+                    controlsDisabled ||
+                    (requiresSelectedCellForDigitInput && currentSelectedIndex === null)
+                  }
                   variant={usesStickyDigitSelection && activeDigit === digit ? "default" : "outline"}
                   onClick={(event) => {
                     handleDigitPress(digit)
@@ -1239,6 +1113,7 @@ export function SudokuMatchPage() {
                   {focusTargets.map((option) => (
                     <Button
                       key={option.value}
+                      disabled={controlsDisabled}
                       size="icon"
                       type="button"
                       className="h-10 w-10"
@@ -1253,6 +1128,7 @@ export function SudokuMatchPage() {
                   {currentFocuses.length > 0 ? (
                     <Button
                       size="sm"
+                      disabled={controlsDisabled}
                       type="button"
                       variant="outline"
                       className="h-10 px-3 text-sm"
@@ -1275,6 +1151,7 @@ export function SudokuMatchPage() {
                   ].map((option) => (
                     <Button
                       key={option.value}
+                      disabled={controlsDisabled}
                       size="sm"
                       type="button"
                       className="h-10 px-3 text-sm"
@@ -1305,13 +1182,21 @@ export function SudokuMatchPage() {
                 {(isCoop ? coopParticipants : raceParticipants).map((participant) => (
                   <div
                     key={participant.profile.usernameTag}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-1 border px-3 py-2"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 border px-3 py-2"
                     style={{ borderColor: participant.color.ring }}
                   >
+                    <ProfileAvatar
+                      avatarSeed={participant.profile.avatarSeed}
+                      avatarUrl={participant.profile.avatarUrl}
+                      className="size-8 rounded-md"
+                      usernameTag={participant.profile.usernameTag}
+                    />
                     <span className="font-medium" style={{ color: participant.color.text }}>
                       {participant.isSelf ? "You" : participant.profile.usernameTag}
                     </span>
-                    <span className="text-muted-foreground">{participant.status}</span>
+                    <span className="text-muted-foreground">
+                      {participantStartLabel(participant.status)}
+                    </span>
                     {"selectedIndex" in participant && participant.selectedIndex !== null ? (
                       <span className="text-muted-foreground">
                         {`R${Math.floor(participant.selectedIndex / 9) + 1} C${(participant.selectedIndex % 9) + 1}`}

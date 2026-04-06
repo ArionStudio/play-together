@@ -97,9 +97,14 @@ function BrandLink() {
   return (
     <Link to="/" className="block">
       <div className="flex items-center gap-3">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <GameController className="size-5" weight="fill" />
-        </div>
+        <img
+          alt=""
+          aria-hidden="true"
+          className="size-10 rounded-lg"
+          height="40"
+          src="/logo-mark.svg"
+          width="40"
+        />
         <p className="text-base font-semibold tracking-tight">Play Together</p>
       </div>
     </Link>

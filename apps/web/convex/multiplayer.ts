@@ -1,8 +1,9 @@
 import { v } from "convex/values"
 
+import { internal } from "./_generated/api"
 import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
-import { internalMutation, mutation, query } from "./_generated/server"
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server"
 import { buildBoardKey } from "@workspace/game-core"
 import type {
   MinesweeperRulesetConfig,
@@ -31,12 +32,8 @@ import {
 import { purgeMatchEvents, recordCompletedRunsForMatch } from "./history"
 import { ensureLeaderboardCategory, writeLeaderboardEntryIfNeeded } from "./leaderboards"
 import { parseJson, requireProfile, serializeJson, toPublicProfile } from "./lib"
-import {
-  createSudokuCatalogSeed,
-  getRandomExtremeValidSeed,
-} from "./sudokuSeeds"
+import { createSudokuCatalogSeed } from "./sudokuSeeds"
 
-const COUNTDOWN_MS = 3000
 const EMPTY_SUDOKU_NOTES = Array.from({ length: 81 }, () => [] as number[])
 const EMPTY_SUDOKU_VALUE_OWNERS = Array.from(
   { length: 81 },
@@ -112,6 +109,22 @@ function buildSudokuRuleset(args: {
       clueStyle: "generated",
     },
   }
+}
+
+function parseSudokuDifficultyFromRulesetKey(rulesetKey: string) {
+  const difficulty = rulesetKey.split(":")[2] as SudokuDifficulty | undefined
+
+  if (
+    difficulty === "easy" ||
+    difficulty === "medium" ||
+    difficulty === "hard" ||
+    difficulty === "expert" ||
+    difficulty === "haaard"
+  ) {
+    return difficulty
+  }
+
+  throw new Error("Invalid Sudoku difficulty.")
 }
 
 function getMinesweeperLeaderboardRuleset(multiplayerMatch: Doc<"minesweeperMatches">) {
@@ -220,6 +233,14 @@ function clearDigitFromRelatedNotes(args: {
 }
 
 function getMatchCountdownState(match: Doc<"matches">) {
+  if (match.status !== "active") {
+    return {
+      countdownEndsAt: match.startedAt,
+      hasStarted: false,
+      remainingMs: 0,
+    }
+  }
+
   const remainingMs = Math.max(0, match.startedAt - Date.now())
 
   return {
@@ -277,6 +298,10 @@ function buildVisibleMinesweeperCells(args: {
 }
 
 function ensureMatchStarted(match: Doc<"matches">) {
+  if (match.status !== "active") {
+    throw new Error("Both players need to press Start before the match begins.")
+  }
+
   if (Date.now() < match.startedAt) {
     throw new Error("Countdown is still in progress.")
   }
@@ -297,6 +322,40 @@ async function getParticipantProfiles(
         : null
     })
   ).then((rows) => rows.filter((row) => row !== null))
+}
+
+async function activateMultiplayerMatchIfReady(
+  ctx: MutationCtx,
+  match: Doc<"matches">
+) {
+  if (match.status === "active") {
+    return match
+  }
+
+  const participants = await ctx.db
+    .query("matchParticipants")
+    .withIndex("by_matchId", (query) => query.eq("matchId", match._id))
+    .take(8)
+
+  if (
+    participants.length === 0 ||
+    participants.some((participant) => participant.status !== "active")
+  ) {
+    return match
+  }
+
+  const startedAt = Date.now()
+
+  await ctx.db.patch(match._id, {
+    startedAt,
+    status: "active",
+  })
+
+  return {
+    ...match,
+    startedAt,
+    status: "active" as const,
+  }
 }
 
 export async function createMinesweeperLobbyMatch(
@@ -333,9 +392,9 @@ export async function createMinesweeperLobbyMatch(
     boardConfig,
     scoreConfig: args.lobby.scoreConfig,
     visibility: "private",
-    status: "active",
+    status: "ready",
     seed: createSeed(),
-    startedAt: now + COUNTDOWN_MS,
+    startedAt: now,
   })
 
   await ctx.db.insert("minesweeperMatches", {
@@ -382,7 +441,7 @@ export async function createMinesweeperLobbyMatch(
     await ctx.db.insert("matchParticipants", {
       matchId,
       profileId: member.profileId,
-      status: "active",
+      status: "pending",
     })
   }
 
@@ -408,28 +467,17 @@ export async function createSudokuLobbyMatch(
     difficulty: SudokuDifficulty
     lobby: Doc<"lobbies">
     members: Doc<"lobbyMembers">[]
+    puzzle: {
+      clueCount: number
+      difficulty: SudokuDifficulty
+      givens: number[]
+      seed: string
+      solution: number[]
+    }
   }
 ) {
   const now = Date.now()
-  const puzzle =
-    args.lobby.teamMode === "race" && args.difficulty === "haaard"
-      ? await (async () => {
-          const catalogSeed = await getRandomExtremeValidSeed(ctx)
-
-          if (!catalogSeed) {
-            throw new Error("No saved Extreme race seeds are available yet.")
-          }
-
-          return {
-            clueCount: catalogSeed.clueCount,
-            difficulty: catalogSeed.difficulty,
-            givens: catalogSeed.givens,
-            seed: catalogSeed.seed,
-            solution: catalogSeed.solution,
-          }
-        })()
-      : createSudokuPuzzle(args.difficulty, createSudokuMatchSeed())
-  const baseGame = createSudokuGame(puzzle)
+  const baseGame = createSudokuGame(args.puzzle)
   const ruleset = buildSudokuRuleset({
     difficulty: args.difficulty,
     teamMode: args.lobby.teamMode as "race" | "coop",
@@ -445,18 +493,18 @@ export async function createSudokuLobbyMatch(
     boardConfig: args.lobby.boardConfig,
     scoreConfig: args.lobby.scoreConfig,
     visibility: "private",
-    status: "active",
-    seed: puzzle.seed,
-    startedAt: now + COUNTDOWN_MS,
+    status: "ready",
+    seed: args.puzzle.seed,
+    startedAt: now,
   })
 
   await ctx.db.insert("sudokuMatches", {
     matchId,
     ruleset,
     difficulty: args.difficulty,
-    puzzleGivens: puzzle.givens,
+    puzzleGivens: args.puzzle.givens,
     sharedBoard: args.lobby.teamMode === "coop",
-    solution: puzzle.solution,
+    solution: args.puzzle.solution,
     createdAt: now,
   })
   await ensureLeaderboardCategory(ctx, ruleset, args.lobby.rulesetKey)
@@ -489,7 +537,7 @@ export async function createSudokuLobbyMatch(
     await ctx.db.insert("matchParticipants", {
       matchId,
       profileId: member.profileId,
-      status: "active",
+      status: "pending",
     })
 
     await ctx.db.insert("sudokuPresences", {
@@ -516,6 +564,248 @@ export async function createSudokuLobbyMatch(
 
   return { matchId }
 }
+
+export const listExtremeRaceSeedPool = internalQuery({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(args.limit ?? 128, 256))
+
+    return await ctx.db
+      .query("sudokuExtremeValidSeeds")
+      .withIndex("by_difficulty_createdAt", (query) => query.eq("difficulty", "haaard"))
+      .order("desc")
+      .take(limit)
+  },
+})
+
+export const finalizeMinesweeperLobbyStart = internalMutation({
+  args: {
+    lobbyId: v.id("lobbies"),
+  },
+  handler: async (ctx, args) => {
+    const lobby = await ctx.db.get(args.lobbyId)
+
+    if (!lobby || lobby.gameKey !== "minesweeper" || lobby.status !== "starting") {
+      return { matchId: null }
+    }
+
+    const members = await ctx.db
+      .query("lobbyMembers")
+      .withIndex("by_lobbyId", (query) => query.eq("lobbyId", args.lobbyId))
+      .take(8)
+
+    if (
+      members.length !== lobby.maxPlayers ||
+      members.some((member) => member.readyState !== "ready")
+    ) {
+      await ctx.db.patch(lobby._id, {
+        status: members.length === 0 ? "closed" : "open",
+        updatedAt: Date.now(),
+      })
+      return { matchId: null }
+    }
+
+    const created = await createMinesweeperLobbyMatch(ctx, {
+      createdByProfileId: lobby.hostProfileId,
+      lobby,
+      members,
+    })
+
+    for (const member of members) {
+      await ctx.db.patch(member._id, {
+        startedMatchId: created.matchId,
+      })
+    }
+
+    await ctx.db.patch(lobby._id, {
+      status: "in_match",
+      updatedAt: Date.now(),
+    })
+
+    return created
+  },
+})
+
+export const finalizeSudokuLobbyStart = internalMutation({
+  args: {
+    difficulty: v.union(
+      v.literal("easy"),
+      v.literal("medium"),
+      v.literal("hard"),
+      v.literal("expert"),
+      v.literal("haaard")
+    ),
+    lobbyId: v.id("lobbies"),
+    puzzle: v.object({
+      clueCount: v.number(),
+      difficulty: v.union(
+        v.literal("easy"),
+        v.literal("medium"),
+        v.literal("hard"),
+        v.literal("expert"),
+        v.literal("haaard")
+      ),
+      givens: v.array(v.number()),
+      seed: v.string(),
+      solution: v.array(v.number()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const lobby = await ctx.db.get(args.lobbyId)
+
+    if (!lobby || lobby.gameKey !== "sudoku" || lobby.status !== "starting") {
+      return { matchId: null }
+    }
+
+    const members = await ctx.db
+      .query("lobbyMembers")
+      .withIndex("by_lobbyId", (query) => query.eq("lobbyId", args.lobbyId))
+      .take(8)
+
+    if (
+      members.length !== lobby.maxPlayers ||
+      members.some((member) => member.readyState !== "ready")
+    ) {
+      await ctx.db.patch(lobby._id, {
+        status: members.length === 0 ? "closed" : "open",
+        updatedAt: Date.now(),
+      })
+      return { matchId: null }
+    }
+
+    const created = await createSudokuLobbyMatch(ctx, {
+      createdByProfileId: lobby.hostProfileId,
+      difficulty: args.difficulty,
+      lobby,
+      members,
+      puzzle: args.puzzle,
+    })
+
+    for (const member of members) {
+      await ctx.db.patch(member._id, {
+        startedMatchId: created.matchId,
+      })
+    }
+
+    await ctx.db.patch(lobby._id, {
+      status: "in_match",
+      updatedAt: Date.now(),
+    })
+
+    return created
+  },
+})
+
+export const failLobbyStart = internalMutation({
+  args: {
+    lobbyId: v.id("lobbies"),
+  },
+  handler: async (ctx, args) => {
+    const lobby = await ctx.db.get(args.lobbyId)
+
+    if (!lobby || lobby.status !== "starting") {
+      return null
+    }
+
+    const members = await ctx.db
+      .query("lobbyMembers")
+      .withIndex("by_lobbyId", (query) => query.eq("lobbyId", args.lobbyId))
+      .take(8)
+
+    await ctx.db.patch(lobby._id, {
+      status: members.length === 0 ? "closed" : "open",
+      updatedAt: Date.now(),
+    })
+
+    return null
+  },
+})
+
+export const startLobbyMatch: ReturnType<typeof internalAction> = internalAction({
+  args: {
+    lobbyId: v.id("lobbies"),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    matchId: Id<"matches"> | null
+  }> => {
+    try {
+      const lobby:
+        | Doc<"lobbies">
+        | null = await ctx.runQuery(internal.multiplayer.getLobbyForStart, {
+        lobbyId: args.lobbyId,
+      })
+
+      if (!lobby || lobby.status !== "starting") {
+        return { matchId: null }
+      }
+
+      if (lobby.gameKey === "minesweeper") {
+        return await ctx.runMutation(internal.multiplayer.finalizeMinesweeperLobbyStart, {
+          lobbyId: args.lobbyId,
+        })
+      }
+
+      const difficulty = parseSudokuDifficultyFromRulesetKey(lobby.rulesetKey)
+      const puzzle: {
+        clueCount: number
+        difficulty: SudokuDifficulty
+        givens: number[]
+        seed: string
+        solution: number[]
+      } =
+        lobby.teamMode === "race" && difficulty === "haaard"
+          ? await (async () => {
+              const catalogSeeds: Doc<"sudokuExtremeValidSeeds">[] =
+                await ctx.runQuery(internal.multiplayer.listExtremeRaceSeedPool, {
+                  limit: 128,
+                })
+
+              if (catalogSeeds.length === 0) {
+                throw new Error("No saved Extreme race seeds are available yet.")
+              }
+
+              const randomIndex =
+                crypto.getRandomValues(new Uint32Array(1))[0]! % catalogSeeds.length
+              const catalogSeed = catalogSeeds[randomIndex]!
+
+              return {
+                clueCount: catalogSeed.clueCount,
+                difficulty: catalogSeed.difficulty,
+                givens: catalogSeed.givens,
+                seed: catalogSeed.seed,
+                solution: catalogSeed.solution,
+              }
+            })()
+          : createSudokuPuzzle(difficulty, createSudokuMatchSeed())
+
+      return await ctx.runMutation(internal.multiplayer.finalizeSudokuLobbyStart, {
+        difficulty,
+        lobbyId: args.lobbyId,
+        puzzle,
+      })
+    } catch (error) {
+      await ctx.runMutation(internal.multiplayer.failLobbyStart, {
+        lobbyId: args.lobbyId,
+      })
+
+      throw error
+    }
+  },
+})
+
+export const getLobbyForStart = internalQuery({
+  args: {
+    lobbyId: v.id("lobbies"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.lobbyId)
+  },
+})
 
 async function getMinesweeperContext(
   ctx: MutationCtx | QueryCtx,
@@ -800,6 +1090,42 @@ export const getMinesweeperMatch = query({
       match: result.match,
       multiplayerMatch: result.multiplayerMatch,
       profileId: result.profile._id,
+    })
+  },
+})
+
+export const confirmMinesweeperStart = mutation({
+  args: {
+    matchId: v.id("matches"),
+  },
+  handler: async (ctx, args) => {
+    const result = await getMinesweeperContext(ctx, args.matchId)
+
+    if (result.match.status === "finished" || result.match.status === "cancelled") {
+      throw new Error("Match already ended.")
+    }
+
+    if (
+      result.currentParticipant.status !== "active" &&
+      result.currentParticipant.status !== "pending"
+    ) {
+      throw new Error("You cannot join this match anymore.")
+    }
+
+    if (result.currentParticipant.status === "pending") {
+      await ctx.db.patch(result.currentParticipant._id, {
+        status: "active",
+      })
+    }
+
+    await activateMultiplayerMatchIfReady(ctx, result.match)
+
+    const refreshed = await getMinesweeperContext(ctx, args.matchId)
+
+    return buildMinesweeperPublicState(ctx, {
+      match: refreshed.match,
+      multiplayerMatch: refreshed.multiplayerMatch,
+      profileId: refreshed.profile._id,
     })
   },
 })
@@ -1226,6 +1552,42 @@ export const getSudokuMatch = query({
       match: result.match,
       profileId: result.profile._id,
       sudokuMatch: result.sudokuMatch,
+    })
+  },
+})
+
+export const confirmSudokuStart = mutation({
+  args: {
+    matchId: v.id("matches"),
+  },
+  handler: async (ctx, args) => {
+    const result = await getSudokuContext(ctx, args.matchId)
+
+    if (result.match.status === "finished" || result.match.status === "cancelled") {
+      throw new Error("Match already ended.")
+    }
+
+    if (
+      result.currentParticipant.status !== "active" &&
+      result.currentParticipant.status !== "pending"
+    ) {
+      throw new Error("You cannot join this match anymore.")
+    }
+
+    if (result.currentParticipant.status === "pending") {
+      await ctx.db.patch(result.currentParticipant._id, {
+        status: "active",
+      })
+    }
+
+    await activateMultiplayerMatchIfReady(ctx, result.match)
+
+    const refreshed = await getSudokuContext(ctx, args.matchId)
+
+    return buildSudokuPublicState(ctx, {
+      match: refreshed.match,
+      profileId: refreshed.profile._id,
+      sudokuMatch: refreshed.sudokuMatch,
     })
   },
 })

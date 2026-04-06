@@ -8,6 +8,7 @@ import { Button } from "@workspace/ui/components/button"
 import { demoLobbies } from "@/lib/demo-data.ts"
 import { usePlatformServices } from "@/app/providers.tsx"
 import { api } from "@convex/api"
+import { ProfileAvatar } from "@/components/profile-avatar.tsx"
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
 import { readAppPreferences, updateAppPreferences } from "@/lib/app-preferences.ts"
 
@@ -53,6 +54,38 @@ function toMatchRoute(gameKey: GameKey, matchId: string) {
   return gameKey === "sudoku"
     ? `/games/sudoku/match/${matchId}`
     : `/games/minesweeper/match/${matchId}`
+}
+
+function LobbyMemberPreview({
+  member,
+}: {
+  member: {
+    isHost?: boolean
+    profile: {
+      avatarSeed?: string
+      avatarUrl?: string
+      usernameTag: string
+    }
+    readyState?: string
+  }
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <ProfileAvatar
+        avatarSeed={member.profile.avatarSeed}
+        avatarUrl={member.profile.avatarUrl}
+        className="size-9 shrink-0 rounded-md"
+        usernameTag={member.profile.usernameTag}
+      />
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{member.profile.usernameTag}</p>
+        <p className="text-xs text-muted-foreground">
+          {member.isHost ? "Host" : "Player"}
+          {member.readyState ? ` / ${member.readyState}` : ""}
+        </p>
+      </div>
+    </div>
+  )
 }
 
 function LobbiesFallback() {
@@ -118,6 +151,7 @@ function ConnectedLobbiesPage() {
   )
   const [joinCode, setJoinCode] = useState("")
   const [lobbyError, setLobbyError] = useState<string | null>(null)
+  const [startingLobbyId, setStartingLobbyId] = useState<string | null>(null)
   const publicLobbies = useQuery(
     api.lobbies.listPublic,
     isConvexAuthenticated && sessionStatus?.hasProfile ? {} : "skip"
@@ -161,6 +195,37 @@ function ConnectedLobbiesPage() {
       },
     }))
   }, [difficulty, gameKey, minesweeperMode, presetKey, sudokuMode, visibility])
+
+  useEffect(() => {
+    if (myLobbies === undefined) {
+      return
+    }
+
+    const matchLobby = myLobbies.find((lobbyState) => lobbyState.currentMemberMatchId)
+
+    if (matchLobby?.currentMemberMatchId) {
+      setStartingLobbyId(null)
+      navigate(
+        toMatchRoute(matchLobby.lobby.gameKey, matchLobby.currentMemberMatchId)
+      )
+      return
+    }
+
+    if (!startingLobbyId) {
+      return
+    }
+
+    const activeLobby = myLobbies.find((lobbyState) => lobbyState.lobby._id === startingLobbyId)
+
+    if (!activeLobby) {
+      setStartingLobbyId(null)
+      return
+    }
+
+    if (activeLobby.lobby.status !== "starting") {
+      setStartingLobbyId(null)
+    }
+  }, [myLobbies, navigate, startingLobbyId])
 
   if (!isSignedIn) {
     return (
@@ -366,6 +431,9 @@ function ConnectedLobbiesPage() {
               </div>
               <div className="divide-y divide-border">
                 {myLobbies.map((lobbyState) => {
+                  const isStarting =
+                    startingLobbyId === lobbyState.lobby._id ||
+                    lobbyState.lobby.status === "starting"
                   const currentMatchRoute = lobbyState.currentMemberMatchId
                     ? toMatchRoute(
                         lobbyState.lobby.gameKey,
@@ -382,6 +450,11 @@ function ConnectedLobbiesPage() {
                             {lobbyState.gameLabel} / {lobbyState.modeLabel} /{" "}
                             {lobbyState.lobby.status}
                           </p>
+                          {isStarting ? (
+                            <p className="mt-2 text-sm font-medium text-primary">
+                              Starting game. Generating match and syncing players...
+                            </p>
+                          ) : null}
                           {lobbyState.lobby.code ? (
                             <p className="mt-1 text-sm text-muted-foreground">
                               Code {lobbyState.lobby.code}
@@ -397,6 +470,7 @@ function ConnectedLobbiesPage() {
                           <Button
                             size="sm"
                             variant="outline"
+                            disabled={isStarting}
                             onClick={() => leaveLobby({ lobbyId: lobbyState.lobby._id })}
                           >
                             Leave
@@ -410,14 +484,7 @@ function ConnectedLobbiesPage() {
                             key={member.profile.usernameTag}
                             className="flex items-center justify-between gap-4 px-3 py-3"
                           >
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">
-                                {member.profile.usernameTag}
-                              </p>
-                              <p className="text-sm text-muted-foreground">
-                                {member.isHost ? "Host" : "Player"} / {member.readyState}
-                              </p>
-                            </div>
+                            <LobbyMemberPreview member={member} />
                             {member.startedMatchId ? (
                               <Button asChild size="sm" variant="outline">
                                 <Link
@@ -437,6 +504,7 @@ function ConnectedLobbiesPage() {
                       <div className="flex flex-wrap gap-2">
                         <Button
                           size="sm"
+                          disabled={isStarting}
                           onClick={() =>
                             setReady({
                               lobbyId: lobbyState.lobby._id,
@@ -449,6 +517,7 @@ function ConnectedLobbiesPage() {
                         <Button
                           size="sm"
                           variant="outline"
+                          disabled={isStarting}
                           onClick={() =>
                             setReady({
                               lobbyId: lobbyState.lobby._id,
@@ -461,8 +530,10 @@ function ConnectedLobbiesPage() {
                         {lobbyState.canStart ? (
                           <Button
                             size="sm"
+                            disabled={isStarting}
                             onClick={async () => {
                               setLobbyError(null)
+                              setStartingLobbyId(lobbyState.lobby._id)
 
                               try {
                                 const result = await startLobby({
@@ -478,6 +549,7 @@ function ConnectedLobbiesPage() {
                                   )
                                 }
                               } catch (error) {
+                                setStartingLobbyId(null)
                                 setLobbyError(
                                   error instanceof Error
                                     ? error.message
@@ -486,7 +558,7 @@ function ConnectedLobbiesPage() {
                               }
                             }}
                           >
-                            Start game
+                            {isStarting ? "Starting..." : "Start game"}
                           </Button>
                         ) : null}
                       </div>
@@ -524,11 +596,29 @@ function ConnectedLobbiesPage() {
                       key={lobby._id}
                       className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-medium">{lobby.title}</p>
                         <p className="mt-1 text-sm text-muted-foreground">
                           {lobby.gameLabel} / {lobby.modeLabel} / {lobby.memberCount}/{lobby.maxPlayers}
                         </p>
+                        <div className="mt-3 flex flex-wrap gap-3">
+                          {lobby.members.map((member) => (
+                            <div
+                              key={member.usernameTag}
+                              className="flex items-center gap-2 rounded-md border border-border px-2 py-1"
+                            >
+                              <ProfileAvatar
+                                avatarSeed={member.avatarSeed}
+                                avatarUrl={member.avatarUrl}
+                                className="size-7 rounded-md"
+                                usernameTag={member.usernameTag}
+                              />
+                              <span className="max-w-32 truncate text-xs font-medium">
+                                {member.usernameTag}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                       <Button
                         size="sm"

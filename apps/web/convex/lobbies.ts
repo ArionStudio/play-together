@@ -1,5 +1,6 @@
 import { v } from "convex/values"
 
+import { internal } from "./_generated/api"
 import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import { mutation, query } from "./_generated/server"
@@ -9,7 +10,6 @@ import { type SudokuDifficulty } from "@workspace/sudoku-engine"
 import { purgeMatchEvents, recordCompletedRunsForMatch } from "./history"
 import { getProfilesByIds, requireProfile, toPublicProfile } from "./lib"
 import { resolveSoloMinesweeperSelection } from "./minesweeper"
-import { createMinesweeperLobbyMatch, createSudokuLobbyMatch } from "./multiplayer"
 
 async function findActiveLobbyMembership(
   ctx: MutationCtx | QueryCtx,
@@ -47,22 +47,6 @@ function getLobbyLabels(args: {
     gameLabel: "Minesweeper",
     modeLabel: args.teamMode === "coop" ? "Team Clear" : "Race",
   }
-}
-
-function parseSudokuDifficulty(rulesetKey: string) {
-  const difficulty = rulesetKey.split(":")[2] as SudokuDifficulty | undefined
-
-  if (
-    difficulty === "easy" ||
-    difficulty === "medium" ||
-    difficulty === "hard" ||
-    difficulty === "expert" ||
-    difficulty === "haaard"
-  ) {
-    return difficulty
-  }
-
-  throw new Error("Invalid Sudoku difficulty.")
 }
 
 function createLobbyCode() {
@@ -148,12 +132,14 @@ async function buildLobbyState(
     .query("lobbyMembers")
     .withIndex("by_lobbyId", (query) => query.eq("lobbyId", args.lobbyId))
     .take(8)
+  const sortedMembers = [...members].sort((left, right) => left.joinedAt - right.joinedAt)
 
-  if (members.length === 0) {
+  if (sortedMembers.length === 0) {
     return null
   }
 
-  const currentMember = members.find((member) => member.profileId === args.profileId) ?? null
+  const currentMember =
+    sortedMembers.find((member) => member.profileId === args.profileId) ?? null
   const labels = getLobbyLabels({
     gameKey: lobby.gameKey,
     rulesetKey: lobby.rulesetKey,
@@ -161,21 +147,21 @@ async function buildLobbyState(
   })
   const profilesById = await getProfilesByIds(
     ctx,
-    members.map((member) => member.profileId)
+    sortedMembers.map((member) => member.profileId)
   )
 
   return {
     canStart:
       lobby.hostProfileId === args.profileId &&
-      members.length === lobby.maxPlayers &&
+      sortedMembers.length === lobby.maxPlayers &&
       lobby.status === "open" &&
-      members.every((member) => member.readyState === "ready"),
+      sortedMembers.every((member) => member.readyState === "ready"),
     currentMemberMatchId: currentMember?.startedMatchId ?? null,
     currentMemberReadyState: currentMember?.readyState ?? null,
     gameLabel: labels.gameLabel,
     lobby,
     modeLabel: labels.modeLabel,
-    members: members.flatMap((member) => {
+    members: sortedMembers.flatMap((member) => {
       const memberProfile = profilesById.get(member.profileId)
 
       return memberProfile
@@ -284,7 +270,7 @@ async function abandonMatchParticipation(
       participant._id !== args.participantId && participant.status === "active"
   )
 
-  if (!hasActiveParticipants) {
+  if (args.match.status !== "active" || !hasActiveParticipants) {
     await ctx.db.patch(args.match._id, {
       completedAt: now,
       outcome: "abandoned",
@@ -316,7 +302,9 @@ export const listPublic = query({
           .query("lobbyMembers")
           .withIndex("by_lobbyId", (query) => query.eq("lobbyId", lobby._id))
           .take(8)
-        if (members.length === 0) {
+        const sortedMembers = [...members].sort((left, right) => left.joinedAt - right.joinedAt)
+
+        if (sortedMembers.length === 0) {
           return null
         }
         const labels = getLobbyLabels({
@@ -324,6 +312,10 @@ export const listPublic = query({
           rulesetKey: lobby.rulesetKey,
           teamMode: lobby.teamMode,
         })
+        const profilesById = await getProfilesByIds(
+          ctx,
+          sortedMembers.map((member) => member.profileId)
+        )
 
         return {
           _id: lobby._id,
@@ -331,9 +323,14 @@ export const listPublic = query({
           gameKey: lobby.gameKey,
           gameLabel: labels.gameLabel,
           maxPlayers: lobby.maxPlayers,
-          memberCount: members.length,
+          memberCount: sortedMembers.length,
+          members: sortedMembers.flatMap((member) => {
+            const profile = profilesById.get(member.profileId)
+
+            return profile ? [toPublicProfile(profile)] : []
+          }),
           modeLabel: labels.modeLabel,
-          slots: `${members.length}/${lobby.maxPlayers}`,
+          slots: `${sortedMembers.length}/${lobby.maxPlayers}`,
           title: lobby.title,
           visibility: lobby.visibility,
         }
@@ -623,7 +620,11 @@ export const leave = mutation({
         .unique()
       const startedMatch = await ctx.db.get(currentMember.startedMatchId)
 
-      if (participant && startedMatch && participant.status === "active") {
+      if (
+        participant &&
+        startedMatch &&
+        (participant.status === "active" || participant.status === "pending")
+      ) {
         await abandonMatchParticipation(ctx, {
           match: startedMatch,
           participantId: participant._id,
@@ -718,33 +719,12 @@ export const start = mutation({
       updatedAt: Date.now(),
     })
 
-    const created =
-      lobby.gameKey === "sudoku"
-        ? await createSudokuLobbyMatch(ctx, {
-            createdByProfileId: profile._id,
-            difficulty: parseSudokuDifficulty(lobby.rulesetKey),
-            lobby,
-            members,
-          })
-        : await createMinesweeperLobbyMatch(ctx, {
-            createdByProfileId: profile._id,
-            lobby,
-            members,
-          })
-
-    for (const member of members) {
-      await ctx.db.patch(member._id, {
-        startedMatchId: created.matchId,
-      })
-    }
-
-    await ctx.db.patch(lobby._id, {
-      status: "in_match",
-      updatedAt: Date.now(),
+    await ctx.scheduler.runAfter(0, internal.multiplayer.startLobbyMatch, {
+      lobbyId: args.lobbyId,
     })
 
     return {
-      matchId: created.matchId,
+      matchId: null,
     }
   },
 })

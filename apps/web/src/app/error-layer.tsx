@@ -126,9 +126,14 @@ function ErrorLayer({
       <div className="border-b border-border bg-card">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <Link to="/" className="flex items-center gap-3 text-sm font-medium tracking-tight">
-            <span className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <GameController className="size-5" weight="fill" />
-            </span>
+            <img
+              alt=""
+              aria-hidden="true"
+              className="size-10 rounded-lg"
+              height="40"
+              src="/logo-mark.svg"
+              width="40"
+            />
             <span>Play Together</span>
           </Link>
           <div className="hidden text-sm text-muted-foreground sm:block">

@@ -15,7 +15,6 @@ import { cn } from "@workspace/ui/lib/utils"
 import {
   clearCellValue,
   createSudokuGame,
-  getConflictingIndices,
   getIncorrectIndices,
   getProgress,
   getRelatedIndices,
@@ -30,6 +29,14 @@ import {
 } from "@workspace/sudoku-engine"
 
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
+import {
+  FocusKindIcon,
+  SudokuBoard,
+  buildFocusForCell,
+  toggleFocusMark,
+  type FocusKind,
+  type FocusMark,
+} from "@/features/sudoku/board.tsx"
 import { resolveNotesDigitInput } from "@/features/sudoku/input-mode.ts"
 import {
   readAppPreferences,
@@ -39,11 +46,6 @@ import {
 
 const DIGIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 type EntryMode = "fill" | "notes" | "focus"
-type FocusKind = "cell" | "row" | "column" | "box" | "digit"
-type FocusMark = {
-  kind: FocusKind
-  index: number
-}
 
 type SudokuSession = {
   difficulty: SudokuDifficulty
@@ -145,188 +147,6 @@ function formatElapsed(elapsedMs: number) {
   const seconds = totalSeconds % 60
 
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-}
-
-function getFocusKey(focus: FocusMark) {
-  return `${focus.kind}:${focus.index}`
-}
-
-function FocusKindIcon({ kind }: { kind: FocusKind }) {
-  if (kind === "cell") {
-    return (
-      <svg
-        viewBox="0 0 16 16"
-        className="h-4 w-4"
-        aria-hidden="true"
-        fill="none"
-      >
-        <rect
-          x="2.5"
-          y="2.5"
-          width="11"
-          height="11"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect x="6" y="6" width="4" height="4" rx="0.75" fill="currentColor" />
-      </svg>
-    )
-  }
-
-  if (kind === "row") {
-    return (
-      <svg
-        viewBox="0 0 16 16"
-        className="h-4 w-4"
-        aria-hidden="true"
-        fill="none"
-      >
-        <rect
-          x="2.5"
-          y="2.5"
-          width="11"
-          height="11"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="3.5"
-          y="6.25"
-          width="9"
-          height="3.5"
-          rx="0.75"
-          fill="currentColor"
-        />
-      </svg>
-    )
-  }
-
-  if (kind === "column") {
-    return (
-      <svg
-        viewBox="0 0 16 16"
-        className="h-4 w-4"
-        aria-hidden="true"
-        fill="none"
-      >
-        <rect
-          x="2.5"
-          y="2.5"
-          width="11"
-          height="11"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="6.25"
-          y="3.5"
-          width="3.5"
-          height="9"
-          rx="0.75"
-          fill="currentColor"
-        />
-      </svg>
-    )
-  }
-
-  if (kind === "box") {
-    return (
-      <svg
-        viewBox="0 0 16 16"
-        className="h-4 w-4"
-        aria-hidden="true"
-        fill="none"
-      >
-        <rect
-          x="2.5"
-          y="2.5"
-          width="11"
-          height="11"
-          rx="1"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <rect
-          x="4.5"
-          y="4.5"
-          width="7"
-          height="7"
-          rx="0.75"
-          fill="currentColor"
-        />
-      </svg>
-    )
-  }
-
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true" fill="none">
-      <circle cx="8" cy="8" r="5.25" stroke="currentColor" strokeWidth="1.5" />
-      <text
-        x="8"
-        y="10.1"
-        textAnchor="middle"
-        fontSize="7.5"
-        fontWeight="700"
-        fill="currentColor"
-      >
-        1
-      </text>
-    </svg>
-  )
-}
-
-function buildFocusForCell(
-  index: number,
-  focusKind: Exclude<FocusKind, "digit">
-): FocusMark {
-  switch (focusKind) {
-    case "cell":
-      return { kind: "cell", index }
-    case "row":
-      return { kind: "row", index: Math.floor(index / 9) }
-    case "column":
-      return { kind: "column", index: index % 9 }
-    case "box":
-      return {
-        kind: "box",
-        index: Math.floor(index / 27) * 3 + Math.floor((index % 9) / 3),
-      }
-  }
-}
-
-function toggleFocusMark(focuses: FocusMark[], nextFocus: FocusMark) {
-  const key = getFocusKey(nextFocus)
-
-  return focuses.some((focus) => getFocusKey(focus) === key)
-    ? focuses.filter((focus) => getFocusKey(focus) !== key)
-    : [...focuses, nextFocus]
-}
-
-function matchesFocus(args: {
-  focus: FocusMark
-  index: number
-  values: number[]
-}) {
-  const row = Math.floor(args.index / 9)
-  const column = args.index % 9
-
-  switch (args.focus.kind) {
-    case "cell":
-      return args.focus.index === args.index
-    case "row":
-      return args.focus.index === row
-    case "column":
-      return args.focus.index === column
-    case "box":
-      return (
-        args.focus.index === Math.floor(row / 3) * 3 + Math.floor(column / 3)
-      )
-    case "digit":
-      return args.values[args.index] === args.focus.index
-  }
 }
 
 function SudokuSetupPanel({
@@ -517,22 +337,13 @@ export function SudokuPage() {
     () => session.game.cells.map((cell) => cell.value),
     [session.game]
   )
-  const conflictSet = useMemo(
-    () => new Set(getConflictingIndices(values)),
-    [values]
+  const notes = useMemo(
+    () => session.game.cells.map((cell) => cell.notes),
+    [session.game]
   )
   const incorrectSet = useMemo(
     () => new Set(getIncorrectIndices(session.game)),
     [session.game]
-  )
-  const relatedSet = useMemo(
-    () =>
-      new Set(
-        session.selectedIndex === null
-          ? []
-          : getRelatedIndices(session.selectedIndex)
-      ),
-    [session.selectedIndex]
   )
   const progress = useMemo(() => getProgress(session.game), [session.game])
   const solved = useMemo(() => isSudokuSolved(session.game), [session.game])
@@ -1081,7 +892,7 @@ export function SudokuPage() {
     )
   }
 
-  const boardClassName = "max-w-[min(100vw-1rem,50rem)]"
+  const boardClassName = minimalView ? "w-full max-h-full max-w-full" : undefined
 
   return (
     <Page
@@ -1142,80 +953,24 @@ export function SudokuPage() {
           <div
             className={cn(
               minimalView
-                ? "min-h-0 flex-1 overflow-auto pt-5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                ? "flex min-h-0 flex-1 items-center justify-center overflow-hidden pt-3"
                 : ""
             )}
           >
-            <div
-              className={cn(
-                minimalView
-                  ? "mx-auto flex w-max justify-center"
-                  : "mx-auto w-full",
-                boardClassName
-              )}
-            >
-              <div className="grid grid-cols-9 border-2 border-foreground/90 bg-border/50">
-                {session.game.cells.map((cell, index) => {
-                  const row = Math.floor(index / 9)
-                  const column = index % 9
-                  const isSelected = index === session.selectedIndex
-                  const isRelated = relatedSet.has(index)
-                  const matchesDigit =
-                    (selectedValue !== 0 && cell.value === selectedValue) ||
-                    (activeDigit !== null && cell.value === activeDigit)
-                  const matchesFocusMark = focuses.some((focus) =>
-                    matchesFocus({ focus, index, values })
-                  )
-
-                  return (
-                    <button
-                      key={index}
-                      type="button"
-                      onClick={() => handleBoardClick(index)}
-                      className={cn(
-                        "relative flex aspect-square items-center justify-center overflow-hidden border border-border text-sm transition-colors sm:text-base",
-                        row === 2 || row === 5
-                          ? "border-b-2 border-b-foreground/90"
-                          : "",
-                        column === 2 || column === 5
-                          ? "border-r-2 border-r-foreground/90"
-                          : "",
-                        cell.fixed
-                          ? "bg-muted/35 font-semibold text-foreground"
-                          : "bg-background text-foreground",
-                        isRelated ? "bg-muted/60" : "",
-                        matchesDigit ? "bg-primary/10" : "",
-                        matchesFocusMark ? "bg-amber-500/15" : "",
-                        isSelected ? "ring-2 ring-primary ring-inset" : "",
-                        conflictSet.has(index) ? "text-destructive" : "",
-                        incorrectSet.has(index)
-                          ? "text-amber-700 dark:text-amber-300"
-                          : ""
-                      )}
-                    >
-                      {cell.value !== 0 ? (
-                        <span>{cell.value}</span>
-                      ) : (
-                        <span className="grid h-full w-full grid-cols-3 place-items-center px-[1px] py-[2px] font-mono text-[10px] leading-none text-muted-foreground sm:text-xs">
-                          {DIGIT_OPTIONS.map((digit) => (
-                            <span
-                              key={digit}
-                              className={
-                                cell.notes.includes(digit)
-                                  ? "opacity-100"
-                                  : "opacity-0"
-                              }
-                            >
-                              {digit}
-                            </span>
-                          ))}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+            <SudokuBoard
+              className={boardClassName}
+              focuses={focuses}
+              givens={session.game.puzzle.givens}
+              highlightedDigits={[
+                ...(selectedValue !== 0 ? [selectedValue] : []),
+                ...(activeDigit !== null ? [activeDigit] : []),
+              ]}
+              incorrectIndices={incorrectSet}
+              notes={notes}
+              onCellClick={handleBoardClick}
+              selectedIndex={session.selectedIndex}
+              values={values}
+            />
           </div>
 
           <div

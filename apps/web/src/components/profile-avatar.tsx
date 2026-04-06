@@ -15,6 +15,7 @@ const AVATAR_BACKGROUND_COLORS = [
 
 type ProfileAvatarProps = {
   avatarSeed?: string
+  avatarUrl?: string
   className?: string
   title?: string
   usernameTag: string
@@ -33,6 +34,7 @@ function createAvatarDataUri(seed: string) {
 
 export function ProfileAvatar({
   avatarSeed,
+  avatarUrl: _avatarUrl,
   className,
   title,
   usernameTag,

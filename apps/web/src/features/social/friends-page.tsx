@@ -7,7 +7,27 @@ import { Button } from "@workspace/ui/components/button"
 import { demoFriends } from "@/lib/demo-data.ts"
 import { usePlatformServices } from "@/app/providers.tsx"
 import { api } from "@convex/api"
+import { ProfileAvatar } from "@/components/profile-avatar.tsx"
 import { Page, PageHeader, Surface } from "@/features/shell/page.tsx"
+
+function ActivityDot({
+  presence,
+  status,
+}: {
+  presence: string
+  status: string
+}) {
+  const toneClassName =
+    presence === "offline" || status === "offline"
+      ? "bg-zinc-400 dark:bg-zinc-600"
+      : status === "in_game"
+        ? "bg-emerald-500"
+        : presence === "away" || presence === "idle"
+          ? "bg-orange-400"
+          : "bg-amber-400"
+
+  return <span className={`inline-flex size-2.5 rounded-full ${toneClassName}`} />
+}
 
 function PresenceLabel({
   presence,
@@ -16,9 +36,19 @@ function PresenceLabel({
   presence: string
   status: string
 }) {
+  const label =
+    presence === "offline" || status === "offline"
+      ? "Offline"
+      : status === "in_game"
+        ? "In game"
+        : presence === "away" || presence === "idle"
+          ? "Away"
+          : "Active"
+
   return (
-    <span className="text-sm text-muted-foreground">
-      {status} · {presence}
+    <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+      <ActivityDot presence={presence} status={status} />
+      {label}
     </span>
   )
 }
@@ -45,19 +75,31 @@ function EmptyState({ message }: { message: string }) {
 function FriendRow({
   action,
   meta,
+  profile,
   subtitle,
-  title,
 }: {
   action?: ReactNode
   meta?: ReactNode
+  profile: {
+    avatarSeed?: string
+    avatarUrl?: string
+    usernameTag: string
+  }
   subtitle?: ReactNode
-  title: string
 }) {
   return (
     <div className="flex flex-col gap-3 px-4 py-4 sm:px-5 md:flex-row md:items-center md:justify-between">
-      <div className="min-w-0 space-y-1">
-        <p className="font-medium">{title}</p>
-        {subtitle ? <div className="text-sm text-muted-foreground">{subtitle}</div> : null}
+      <div className="flex min-w-0 items-center gap-3">
+        <ProfileAvatar
+          avatarSeed={profile.avatarSeed}
+          avatarUrl={profile.avatarUrl}
+          className="size-10 shrink-0 rounded-md"
+          usernameTag={profile.usernameTag}
+        />
+        <div className="min-w-0 space-y-1">
+          <p className="truncate font-medium">{profile.usernameTag}</p>
+          {subtitle ? <div className="text-sm text-muted-foreground">{subtitle}</div> : null}
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-3 md:justify-end">
         {meta ? <div className="text-sm text-muted-foreground">{meta}</div> : null}
@@ -79,7 +121,7 @@ function FriendsFallback() {
         {demoFriends.map((friend) => (
           <FriendRow
             key={friend.usernameTag}
-            title={friend.usernameTag}
+            profile={{ usernameTag: friend.usernameTag }}
             subtitle={friend.note}
             meta={friend.status}
           />
@@ -188,7 +230,7 @@ function ConnectedFriendsPage() {
           {searchResults?.map((result) => (
             <FriendRow
               key={result.usernameTag}
-              title={result.usernameTag}
+              profile={result}
               subtitle={<PresenceLabel presence={result.presence} status={result.status} />}
               action={
                 <Button
@@ -230,7 +272,7 @@ function ConnectedFriendsPage() {
           friends.incomingInvites.map((invite) => (
             <FriendRow
               key={invite.inviteId}
-              title={invite.from.usernameTag}
+              profile={invite.from}
               subtitle={new Date(invite.createdAt).toLocaleString()}
               action={
                 <div className="flex gap-2">
@@ -275,7 +317,7 @@ function ConnectedFriendsPage() {
           friends.outgoingInvites.map((invite) => (
             <FriendRow
               key={invite.inviteId}
-              title={invite.to.usernameTag}
+              profile={invite.to}
               subtitle={new Date(invite.createdAt).toLocaleString()}
               meta="Pending"
             />
@@ -294,7 +336,7 @@ function ConnectedFriendsPage() {
           friends.friends.map((friend) => (
             <FriendRow
               key={friend.usernameTag}
-              title={friend.usernameTag}
+              profile={friend}
               meta={<PresenceLabel presence={friend.presence} status={friend.status} />}
             />
           ))

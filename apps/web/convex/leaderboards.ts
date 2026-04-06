@@ -6,11 +6,26 @@ import { mutation, query } from "./_generated/server"
 import {
   buildBoardKey,
   buildLeaderboardCategoryKey,
+  buildRulesetKey,
   serializeLeaderboardCategoryKey,
 } from "@workspace/game-core"
-import type { RulesetConfig } from "@workspace/game-contracts"
+import { MINESWEEPER_RANKED_RULESETS, type RulesetConfig } from "@workspace/game-contracts"
 import { sudokuDifficultyLabels, type SudokuDifficulty } from "@workspace/sudoku-engine"
 import { getProfilesByIds, requireProfile } from "./lib"
+
+const SUDOKU_DIFFICULTIES = [
+  "easy",
+  "medium",
+  "hard",
+  "expert",
+  "haaard",
+] as const satisfies SudokuDifficulty[]
+
+const MINESWEEPER_PRESETS = [
+  "beginner",
+  "intermediate",
+  "expert",
+] as const satisfies Array<keyof typeof MINESWEEPER_RANKED_RULESETS>
 
 export function categoryKeyForRuleset(ruleset: RulesetConfig) {
   return serializeLeaderboardCategoryKey(buildLeaderboardCategoryKey(ruleset))
@@ -85,12 +100,112 @@ export async function writeLeaderboardEntryIfNeeded(
   return await ctx.db.get(entryId)
 }
 
-export const listCategories = query({
-  args: {},
-  handler: async (ctx) => {
-    const categories = await ctx.db.query("leaderboardCategories").take(64)
+type CategoryRowLike = Pick<
+  Doc<"leaderboardCategories">,
+  "key" | "gameKey" | "modeKey" | "ranked" | "boardKey" | "rulesetKey" | "createdAt"
+>
 
-    return categories.sort((left, right) => {
+function buildCanonicalMinesweeperMultiplayerRuleset(args: {
+  presetKey: (typeof MINESWEEPER_PRESETS)[number]
+  teamMode: "race" | "coop"
+}): RulesetConfig {
+  const baseRuleset = MINESWEEPER_RANKED_RULESETS[args.presetKey]
+
+  return {
+    gameKey: "minesweeper",
+    modeKey: args.teamMode,
+    ranked: false,
+    teamMode: args.teamMode,
+    boardConfig: baseRuleset.boardConfig,
+    scoreConfig: {
+      scoringKey: "time_asc",
+      timeLimitSeconds: null,
+      maxMistakes: 0,
+    },
+    gameConfig: {
+      firstClickBehavior: "safe_zero",
+      eliminationRule: args.teamMode === "coop" ? "team_wipe" : "single_life",
+      sharedLossRule: args.teamMode === "coop" ? "team_wipe" : "single_life",
+    },
+  }
+}
+
+function buildCanonicalSudokuRuleset(args: {
+  difficulty: SudokuDifficulty
+  teamMode: "race" | "coop"
+}): RulesetConfig {
+  return {
+    gameKey: "sudoku",
+    modeKey: args.teamMode,
+    ranked: false,
+    teamMode: args.teamMode,
+    boardConfig: {
+      width: 9,
+      height: 9,
+    },
+    scoreConfig: {
+      scoringKey: "time_asc",
+      timeLimitSeconds: null,
+      maxMistakes: null,
+    },
+    gameConfig: {
+      variant: "classic",
+      difficulty: args.difficulty,
+      clueStyle: "generated",
+    },
+  }
+}
+
+function buildCanonicalCategories(): CategoryRowLike[] {
+  const categories: CategoryRowLike[] = []
+
+  for (const presetKey of MINESWEEPER_PRESETS) {
+    const ruleset = MINESWEEPER_RANKED_RULESETS[presetKey]
+
+    categories.push({
+      key: categoryKeyForRuleset(ruleset),
+      ...buildLeaderboardCategoryKey(ruleset),
+      rulesetKey: buildRulesetKey(ruleset),
+      createdAt: 0,
+    })
+
+    for (const teamMode of ["race", "coop"] as const) {
+      const multiplayerRuleset = buildCanonicalMinesweeperMultiplayerRuleset({
+        presetKey,
+        teamMode,
+      })
+
+      categories.push({
+        key: categoryKeyForRuleset(multiplayerRuleset),
+        ...buildLeaderboardCategoryKey(multiplayerRuleset),
+        rulesetKey: `minesweeper:${teamMode}:${presetKey}`,
+        createdAt: 0,
+      })
+    }
+  }
+
+  for (const difficulty of SUDOKU_DIFFICULTIES) {
+    for (const teamMode of ["race", "coop"] as const) {
+      const ruleset = buildCanonicalSudokuRuleset({
+        difficulty,
+        teamMode,
+      })
+
+      categories.push({
+        key: categoryKeyForRuleset(ruleset),
+        ...buildLeaderboardCategoryKey(ruleset),
+        rulesetKey: `sudoku:${teamMode}:${difficulty}`,
+        createdAt: 0,
+      })
+    }
+  }
+
+  return categories
+}
+
+function decorateCategories(categories: CategoryRowLike[]) {
+  return categories
+    .sort((left, right) => {
       if (left.gameKey !== right.gameKey) {
         return left.gameKey.localeCompare(right.gameKey)
       }
@@ -100,7 +215,8 @@ export const listCategories = query({
       }
 
       return left.boardKey.localeCompare(right.boardKey)
-    }).map((category) => {
+    })
+    .map((category) => {
       const title = (() => {
         if (category.gameKey === "sudoku" && category.rulesetKey.startsWith("sudoku:")) {
           const [, mode, difficulty] = category.rulesetKey.split(":")
@@ -132,6 +248,23 @@ export const listCategories = query({
         title,
       }
     })
+}
+
+export const listCategories = query({
+  args: {},
+  handler: async (ctx) => {
+    const storedCategories = await ctx.db.query("leaderboardCategories").take(64)
+    const categoriesByKey = new Map<string, CategoryRowLike>()
+
+    for (const category of buildCanonicalCategories()) {
+      categoriesByKey.set(category.key, category)
+    }
+
+    for (const category of storedCategories) {
+      categoriesByKey.set(category.key, category)
+    }
+
+    return decorateCategories([...categoriesByKey.values()])
   },
 })
 
